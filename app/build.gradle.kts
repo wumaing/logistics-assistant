@@ -65,6 +65,15 @@ android {
         // 自适应图标必须放 mipmap-anydpi-v26（移走会 AAPT 资源找不到），此警告为误报
         disable += "ObsoleteSdkInt"
     }
+
+    testOptions {
+        unitTests.all {
+            // 项目路径含中文（d:\huihua\浏览助手），Gradle worker classpath argfile 以 UTF-8 写入，
+            // JVM 默认 sun.jnu.encoding=GBK 解码导致中文路径乱码、测试类 ClassNotFound。
+            // 强制 worker 以 UTF-8 解码文件名，修复中文路径下的单测执行。
+            it.jvmArgs("-Dsun.jnu.encoding=UTF-8")
+        }
+    }
 }
 
 dependencies {
@@ -102,4 +111,8 @@ dependencies {
 
     // Gson
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // 单元测试
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
