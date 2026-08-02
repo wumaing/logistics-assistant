@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
                     val startDestination = when (intent.getStringExtra("navigate_to")) {
                         "alert", "settings" -> "alert_settings"
                         "history" -> "history"
+                        "filter" -> "filter"
                         else -> "main"
                     }
                     AppNavigation(

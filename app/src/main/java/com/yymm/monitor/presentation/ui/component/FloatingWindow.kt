@@ -204,16 +204,21 @@ fun FloatingWindowContent(
                 // 快捷入口（2x2 网格）
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        TextButton(onClick = { onNavigate("rules") }) { Text("📋 规则") }
+                        TextButton(onClick = { onNavigate("filter") }) { Text("🔍 筛选") }
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        TextButton(onClick = { onNavigate("alert") }) { Text("🔔 提醒") }
+                        TextButton(onClick = { onNavigate("rules") }) { Text("📋 规则") }
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        TextButton(onClick = { onNavigate("alert") }) { Text("🔔 提醒") }
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         TextButton(onClick = { onNavigate("history") }) { Text("📊 历史") }
                     }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         TextButton(onClick = { onNavigate("settings") }) { Text("⚙️ 设置") }
                     }

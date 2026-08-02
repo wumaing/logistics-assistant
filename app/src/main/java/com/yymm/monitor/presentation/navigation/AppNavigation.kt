@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.yymm.monitor.presentation.ui.screen.AlertSettingsScreen
+import com.yymm.monitor.presentation.ui.screen.FilterScreen
 import com.yymm.monitor.presentation.ui.screen.HistoryScreen
 import com.yymm.monitor.presentation.ui.screen.MainScreen
 import com.yymm.monitor.presentation.ui.screen.RuleEditScreen
@@ -47,6 +48,9 @@ fun AppNavigation(
         }
         composable("history") {
             HistoryScreen(navController = navController)
+        }
+        composable("filter") {
+            FilterScreen(navController = navController)
         }
         composable("guide") {
             // GuideScreen 由 MainActivity 控制（首次启动引导），此路由保留占位

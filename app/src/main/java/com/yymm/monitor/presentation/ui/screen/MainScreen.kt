@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import com.yymm.monitor.data.local.entity.MatchRuleEntity
 import com.yymm.monitor.domain.service.FloatingWindowManager
 import com.yymm.monitor.presentation.ui.theme.StatusGreen
@@ -69,6 +70,12 @@ fun MainScreen(
     val activeRules by viewModel.activeRules.collectAsState()
 
     var deleteTarget by remember { mutableStateOf<MatchRuleEntity?>(null) }
+
+    // 每次回到主界面（含从筛选页/编辑页返回）刷新规则列表
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    LaunchedEffect(backStackEntry) {
+        viewModel.loadRules()
+    }
 
     // 顶部标题栏 + 规则列表 + 底部固定按钮
     Scaffold(
@@ -100,13 +107,24 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("浏览助手", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "⚙️",
-                        fontSize = 20.sp,
-                        modifier = Modifier
-                            .clickable { navController.navigate("alert_settings") }
-                            .padding(4.dp)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "🔍 筛选",
+                            fontSize = 15.sp,
+                            color = Color(0xFFF44336),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clickable { navController.navigate("filter") }
+                                .padding(8.dp)
+                        )
+                        Text(
+                            "⚙️",
+                            fontSize = 20.sp,
+                            modifier = Modifier
+                                .clickable { navController.navigate("alert_settings") }
+                                .padding(4.dp)
+                        )
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
             }
