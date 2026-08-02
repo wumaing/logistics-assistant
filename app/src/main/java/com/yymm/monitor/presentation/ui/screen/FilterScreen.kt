@@ -3,6 +3,7 @@ package com.yymm.monitor.presentation.ui.screen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +23,11 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -117,7 +123,7 @@ fun FilterScreen(
             )
         },
         bottomBar = {
-            // 底部操作栏：清空筛选 + 确认
+            // 底部操作栏：清空筛选（白底灰边）+ 确认（红底）
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -125,20 +131,28 @@ fun FilterScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(
-                    onClick = { viewModel.clearSelected() },
-                    modifier = Modifier.weight(1f)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .border(1.dp, Color(0xFFCCCCCC), RoundedCornerShape(22.dp))
+                        .background(Color.White, RoundedCornerShape(22.dp))
+                        .clickable { viewModel.clearSelected() },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("清空筛选", color = StatusRed)
+                    Text("清空筛选", fontSize = 15.sp, color = Color.Black)
                 }
-                Button(
-                    onClick = {
-                        viewModel.confirmFilter(onSuccess = { navController.popBackStack() })
-                    },
-                    modifier = Modifier.weight(2f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .background(Primary, RoundedCornerShape(22.dp))
+                        .clickable {
+                            viewModel.confirmFilter(onSuccess = { navController.popBackStack() })
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("确认筛选方案", fontSize = 15.sp)
+                    Text("确认", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
@@ -166,17 +180,49 @@ fun FilterScreen(
             }
             Spacer(Modifier.height(4.dp))
 
-            // ── 搜索框 ──
-            OutlinedTextField(
-                value = keyword,
-                onValueChange = { viewModel.updateKeyword(it) },
-                placeholder = { Text("输入省份/城市/市区搜索") },
+            // ── 搜索框（带🔍图标，圆角） ──
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                singleLine = true
-            )
-            Spacer(Modifier.height(4.dp))
+                    .padding(horizontal = 16.dp)
+                    .height(44.dp)
+                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(22.dp))
+                    .background(Color(0xFFF7F7F7), RoundedCornerShape(22.dp))
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🔍", fontSize = 15.sp)
+                Spacer(Modifier.width(8.dp))
+                BasicTextField(
+                    value = keyword,
+                    onValueChange = { viewModel.updateKeyword(it) },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 14.sp,
+                        color = Color.Black
+                    ),
+                    decorationBox = { innerTextField ->
+                        Box {
+                            if (keyword.isEmpty()) {
+                                Text("输入省份/城市/市区搜索", fontSize = 14.sp, color = Color(0xFF999999))
+                            }
+                            innerTextField()
+                        }
+                    }
+                )
+                if (keyword.isNotEmpty()) {
+                    Text(
+                        "✕",
+                        fontSize = 14.sp,
+                        color = Color(0xFF999999),
+                        modifier = Modifier
+                            .clickable { viewModel.updateKeyword("") }
+                            .padding(4.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
 
             LazyColumn(
                 modifier = Modifier
@@ -186,9 +232,9 @@ fun FilterScreen(
                 // ── 已选地区 ──
                 item {
                     Text(
-                        if (activeTab == "FROM") "已选出发地（最多5个）" else "已选目的地（最多5个）",
-                        fontSize = 13.sp,
-                        color = Color.Gray
+                        if (activeTab == "FROM") "已选出发地（可多选）" else "已选目的地（可多选）",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.height(4.dp))
                 }
@@ -212,22 +258,32 @@ fun FilterScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                // ── 历史地区 ──
+                // ── 历史地区（默认前4个，展开显示全部） ──
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("历史地区", fontSize = 13.sp, color = Color.Gray)
-                        TextButton(onClick = { historyExpanded = !historyExpanded }) {
-                            Text(if (historyExpanded) "收起" else "展开", fontSize = 13.sp)
+                        Text("历史地区", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        if (history.isNotEmpty()) {
+                            Text(
+                                if (historyExpanded) "收起 ▲" else "展开 ▼",
+                                fontSize = 13.sp,
+                                color = Primary,
+                                modifier = Modifier
+                                    .clickable { historyExpanded = !historyExpanded }
+                                    .padding(4.dp)
+                            )
                         }
                     }
+                    Spacer(Modifier.height(4.dp))
                 }
-                if (historyExpanded && history.isNotEmpty()) {
+                if (history.isNotEmpty()) {
                     item {
+                        val shown = if (historyExpanded) history else history.take(4)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(history) { rule ->
+                            items(shown) { rule ->
                                 HistoryRegionTag(
                                     text = "${rule.province}${rule.city ?: ""}${rule.district ?: ""}",
                                     onClick = {
@@ -392,25 +448,28 @@ fun FilterScreen(
 private fun sameLocation(a: LocationRule, b: LocationRule): Boolean =
     a.province == b.province && a.city == b.city && a.district == b.district
 
-/** 顶部 Tab（出发地/目的地） */
+/** 顶部 Tab（出发地/目的地）：激活项红色文字 + 红色下划线指示器 */
 @Composable
 private fun FilterTab(text: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp)
-            .then(
-                if (selected) Modifier.border(2.dp, Primary, RoundedCornerShape(8.dp))
-                else Modifier.border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
-            ),
-        contentAlignment = Alignment.Center
+            .padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text,
-            fontSize = 14.sp,
+            fontSize = 15.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            color = if (selected) Primary else Color.Black
+            color = if (selected) Primary else Color(0xFF666666)
+        )
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.5f)
+                .height(3.dp)
+                .background(if (selected) Primary else Color.Transparent, RoundedCornerShape(2.dp))
         )
     }
 }
@@ -444,7 +503,7 @@ private fun HistoryRegionTag(text: String, onClick: () -> Unit) {
     }
 }
 
-/** 面包屑导航：省 > 市 > 请选择区（当前步红色下划线高亮） */
+/** 面包屑导航：省 > 市 > 请选择区（当前步红色下划线高亮）+ 返回上一级 */
 @Composable
 private fun Breadcrumb(
     province: Province?,
@@ -455,18 +514,37 @@ private fun Breadcrumb(
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        BreadcrumbItem("全国", highlighted = province == null, onClick = onBackProvince)
-        if (province != null) {
-            Text(">", fontSize = 13.sp, color = Color.Gray)
-            BreadcrumbItem(province.name, highlighted = city == null, onClick = onBackProvince)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            BreadcrumbItem("全国", highlighted = province == null, onClick = onBackProvince)
+            if (province != null) {
+                Text(">", fontSize = 13.sp, color = Color.Gray)
+                BreadcrumbItem(province.name, highlighted = city == null, onClick = onBackProvince)
+            }
+            if (province != null && city != null) {
+                Text(">", fontSize = 13.sp, color = Color.Gray)
+                BreadcrumbItem(city.name, highlighted = false, onClick = onBackCity)
+                Text(">", fontSize = 13.sp, color = Color.Gray)
+                BreadcrumbItem("请选择区", highlighted = true, onClick = {})
+            }
         }
-        if (province != null && city != null) {
-            Text(">", fontSize = 13.sp, color = Color.Gray)
-            BreadcrumbItem(city.name, highlighted = false, onClick = onBackCity)
-            Text(">", fontSize = 13.sp, color = Color.Gray)
-            BreadcrumbItem("请选择区", highlighted = true, onClick = {})
+        // 返回上一级按钮（非省级视图时显示）
+        if (province != null) {
+            Text(
+                "返回上一级",
+                fontSize = 12.sp,
+                color = Primary,
+                modifier = Modifier
+                    .clickable {
+                        if (city != null) onBackCity() else onBackProvince()
+                    }
+                    .padding(4.dp)
+            )
         }
     }
 }
@@ -520,31 +598,43 @@ private fun RegionGrid(
     }
 }
 
-/** 网格单元格（选中红框红字 / 被上级包含禁用灰字 / 正常黑字） */
+/** 网格单元格（选中红框红字 / 被上级包含禁用灰字 / 正常黑字，按压缩放动效） */
 @Composable
 private fun RegionGridCell(name: String, selected: Boolean, disabled: Boolean, onClick: () -> Unit) {
     val borderColor = when {
         selected -> Primary
         disabled -> Color(0xFFE0E0E0)
-        else -> Color.Gray
+        else -> Color(0xFFE5E5E5)
     }
     val textColor = when {
         selected -> Primary
-        disabled -> Color(0xFFBDBDBD)
+        disabled -> Color(0xFF999999)
         else -> Color.Black
     }
+    // 按压缩放：交互源驱动 scale 0.95
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.95f else 1f,
+        animationSpec = tween(150),
+        label = "pressScale"
+    )
     Box(
         modifier = Modifier
             .padding(4.dp)
+            .scale(scale)
             .border(1.dp, borderColor, RoundedCornerShape(8.dp))
             .background(if (selected) PrimaryContainer else Color.White, RoundedCornerShape(8.dp))
-            .then(if (disabled) Modifier else Modifier.clickable(onClick = onClick))
+            .then(
+                if (disabled) Modifier
+                else Modifier.clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            )
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             name,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             color = textColor
         )
     }
