@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
+import com.yymm.monitor.domain.service.FloatingWindowManager
 import com.yymm.monitor.presentation.navigation.AppNavigation
 import com.yymm.monitor.presentation.ui.screen.GuideScreen
 import com.yymm.monitor.presentation.ui.theme.YymmMonitorTheme
@@ -107,6 +108,9 @@ class MainActivity : ComponentActivity() {
             val overlayOk = PermissionUtil.isFloatingWindowAllowed(this)
             if (!accessibilityOk || !overlayOk) {
                 PermissionMaskState.shouldShow.value = true
+            } else {
+                // 启动即就绪：权限正常时自动常驻悬浮窗，方便随时点"开始监控"
+                FloatingWindowManager.show(this)
             }
         }
     }

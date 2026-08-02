@@ -80,7 +80,6 @@ object FloatingWindowManager {
                     onExpandToggle = { toggleExpand(context) },
                     onStartClick = { YymmMonitorService.instance?.startMonitoring() },
                     onPauseClick = { YymmMonitorService.instance?.pauseMonitoring() },
-                    onResumeClick = { YymmMonitorService.instance?.resumeMonitoring() },
                     onNavigate = { route -> navigateTo(context, route) },
                     onClose = { toggleExpand(context) }
                 )

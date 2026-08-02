@@ -85,6 +85,12 @@ class YymmMonitorService : AccessibilityService() {
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
+        // 启动即就绪：无障碍服务连接后自动进入 READY（悬浮窗显示"开始监控"），
+        // 无需额外等待。用户点击"开始"即进入 RUNNING 开始轮询匹配。
+        if (_monitorState.value == MonitorState.IDLE) {
+            _monitorState.value = MonitorState.READY
+            FloatingWindowManager.updateState(MonitorState.READY)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {

@@ -54,7 +54,6 @@ fun FloatingWindowContent(
     onExpandToggle: () -> Unit,
     onStartClick: () -> Unit,
     onPauseClick: () -> Unit,
-    onResumeClick: () -> Unit,
     onNavigate: (String) -> Unit,
     onClose: () -> Unit
 ) {
@@ -185,13 +184,13 @@ fun FloatingWindowContent(
                             Text("⏸ 暂停监控")
                         }
                     }
-                    MonitorState.PAUSED, MonitorState.IDLE, MonitorState.ERROR -> {
+                    MonitorState.READY, MonitorState.PAUSED, MonitorState.IDLE, MonitorState.ERROR -> {
                         Button(
-                            onClick = onResumeClick,
+                            onClick = onStartClick,
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                         ) {
-                            Text("▶ 恢复监控")
+                            Text("🚀 开始监控")
                         }
                     }
                     else -> {
@@ -237,10 +236,11 @@ object FloatingWindowHideHandler {
     fun dumpNodeTree() = dumpNodeTreeCallback?.invoke()
 }
 
-/** 状态颜色（PRD D.2）：绿=监控中, 红=暂停/错误, 黄=检测中, 灰=等待启动 */
+/** 状态颜色（PRD D.2）：绿=监控中, 红=暂停/错误, 黄=检测中, 蓝=就绪, 灰=等待启动 */
 fun getStatusColor(state: MonitorState): Color = when (state) {
     MonitorState.RUNNING -> Color(0xFF4CAF50)
     MonitorState.PAUSED, MonitorState.ERROR -> Color(0xFFF44336)
+    MonitorState.READY -> Color(0xFF2196F3)
     MonitorState.CHECKING -> Color(0xFFFFC107)
     MonitorState.IDLE -> Color(0xFF9E9E9E)
 }
@@ -248,7 +248,7 @@ fun getStatusColor(state: MonitorState): Color = when (state) {
 /** 状态图标 */
 fun getStatusIcon(state: MonitorState): String = when (state) {
     MonitorState.RUNNING -> "●"
-    MonitorState.PAUSED, MonitorState.IDLE -> "▶"
+    MonitorState.READY, MonitorState.PAUSED, MonitorState.IDLE -> "▶"
     MonitorState.ERROR -> "!"
     MonitorState.CHECKING -> "?"
 }
@@ -256,6 +256,7 @@ fun getStatusIcon(state: MonitorState): String = when (state) {
 /** 状态文本 */
 fun getStatusText(state: MonitorState): String = when (state) {
     MonitorState.RUNNING -> "监控运行中"
+    MonitorState.READY -> "就绪，待开始"
     MonitorState.PAUSED -> "已暂停"
     MonitorState.CHECKING -> "检测中..."
     MonitorState.IDLE -> "等待启动"
