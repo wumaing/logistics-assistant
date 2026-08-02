@@ -1,6 +1,7 @@
 package com.yymm.monitor.presentation
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,6 +47,11 @@ object PermissionMaskState {
     val shouldShow = MutableStateFlow(false)
 }
 
+/** 悬浮窗快捷入口导航事件：singleTask 复用 MainActivity 时，用事件驱动 NavController 跳转 */
+object NavigationEvent {
+    val route = MutableStateFlow<String?>(null)
+}
+
 /**
  * 主界面入口。
  *
@@ -89,6 +95,22 @@ class MainActivity : ComponentActivity() {
                         navController = navController,
                         startDestination = startDestination
                     )
+                    // 悬浮窗快捷入口：singleTask 复用 Activity 时 onCreate 不会重跑，
+                    // 用事件驱动 NavController 跳转（悬浮窗再次点击也能生效）
+                    val navRoute by NavigationEvent.route.collectAsStateWithLifecycle()
+                    LaunchedEffect(navRoute) {
+                        navRoute?.let { route ->
+                            NavigationEvent.route.value = null // 消费事件
+                            try {
+                                navController.navigate(route) {
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            } catch (_: Exception) {
+                                // 路由不存在时忽略，不打断用户
+                            }
+                        }
+                    }
                 }
 
                 // 前台权限回收检测（PRD A.2）
@@ -99,6 +121,18 @@ class MainActivity : ComponentActivity() {
                     })
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // singleTask：悬浮窗快捷入口再次启动时走这里，转发导航事件
+        when (intent.getStringExtra("navigate_to")) {
+            "alert", "settings" -> NavigationEvent.route.value = "alert_settings"
+            "history" -> NavigationEvent.route.value = "history"
+            "filter" -> NavigationEvent.route.value = "filter"
+            else -> NavigationEvent.route.value = "main"
         }
     }
 

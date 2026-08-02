@@ -1,8 +1,5 @@
 package com.yymm.monitor.presentation.ui.screen
 
-import android.content.Context
-import android.content.Intent
-import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,7 +46,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.yymm.monitor.data.local.entity.MatchRuleEntity
-import com.yymm.monitor.domain.service.FloatingWindowManager
 import com.yymm.monitor.presentation.ui.theme.StatusGreen
 import com.yymm.monitor.presentation.ui.theme.StatusYellow
 import com.yymm.monitor.presentation.viewmodel.MainViewModel
@@ -77,19 +73,22 @@ fun MainScreen(
         viewModel.loadRules()
     }
 
-    // 顶部标题栏 + 规则列表 + 底部固定按钮
+    // 顶部标题栏 + 规则列表
     Scaffold(
         bottomBar = {
-            // 底部固定大按钮
-            Button(
-                onClick = { startMonitoring(context) },
+            // 提示条：真人手动进入司机页后点悬浮窗"开始监控"
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
-                    .height(52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
+                    .background(Color(0xFFF5F5F5))
+                    .padding(vertical = 8.dp, horizontal = 16.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Text("🚀 去运满满开始监控", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "请手动打开运满满司机页，点击悬浮球「开始监控」开始匹配",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
             }
         }
     ) { padding ->
@@ -300,19 +299,5 @@ private fun EmptyHint(text: String) {
         contentAlignment = Alignment.Center
     ) {
         Text(text, fontSize = 13.sp, color = Color.Gray)
-    }
-}
-
-/** 启动监控：检查权限 + 显示悬浮窗 + 启动运满满 */
-private fun startMonitoring(context: Context) {
-    // 显示悬浮窗
-    FloatingWindowManager.show(context)
-    // 尝试启动司机端
-    listOf("com.xiwei.logistics", "com.yymm.driver", "com.yunmanman.driver").forEach { pkg ->
-        context.packageManager.getLaunchIntentForPackage(pkg)?.let {
-            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(it)
-            return
-        }
     }
 }
