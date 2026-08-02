@@ -104,6 +104,9 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.48")
     kapt("com.google.dagger:hilt-compiler:2.48")
     implementation("androidx.hilt:hilt-navigation-compose:1.0.0")
+    // 显式升级 navigation-compose：hilt-navigation-compose 1.0.0 传递依赖 navigation 2.4.0，
+    // 太老导致 hiltViewModel() 在真机报 SAVED_STATE_REGISTRY_OWNER_KEY 缺失崩溃（实机验证发现）
+    implementation("androidx.navigation:navigation-compose:2.7.7")
 
     // Room (kapt)
     implementation("androidx.room:room-runtime:2.6.1")

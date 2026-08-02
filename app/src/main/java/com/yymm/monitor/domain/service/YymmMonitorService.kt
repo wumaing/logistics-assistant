@@ -123,10 +123,14 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        // 不 cancel serviceScope：无障碍服务被系统暂时 unbind（如切走/回收）后，
+        // 会再次 onServiceConnected 重新绑定。scope 一旦取消，后续 launch 抛异常，
+        // 监控链路无法恢复（用户反馈"退出软件后无障碍被关闭"即源于此）。
         stopRefreshLoop()
         alertManager.destroy()
         instance = null
-        serviceScope.cancel()
+        _monitorState.value = MonitorState.IDLE
+        FloatingWindowManager.updateState(MonitorState.IDLE)
         return super.onUnbind(intent)
     }
 

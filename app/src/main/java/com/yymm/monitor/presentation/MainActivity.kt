@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
         getSharedPreferences("yymm_settings", Context.MODE_PRIVATE)
     }
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -104,14 +106,22 @@ class MainActivity : ComponentActivity() {
         // 每次回前台检测权限是否被回收
         val guideCompleted = prefs.getBoolean("guide_completed", false)
         if (guideCompleted) {
-            val accessibilityOk = PermissionUtil.isAccessibilityServiceEnabled(this)
             val overlayOk = PermissionUtil.isFloatingWindowAllowed(this)
-            if (!accessibilityOk || !overlayOk) {
-                PermissionMaskState.shouldShow.value = true
-            } else {
-                // 启动即就绪：权限正常时自动常驻悬浮窗，方便随时点"开始监控"
+            // 悬浮窗是无障碍/订单提醒的常驻入口：只要悬浮窗权限在就常驻显示，
+            // 不因无障碍暂缺而消失（缺失时由遮罩引导 + 悬浮窗状态提示）
+            if (overlayOk) {
                 FloatingWindowManager.show(this)
             }
+            // 延迟检测无障碍：OPPO/ColorOS 上服务绑定有延迟（用户刚开启时
+            // onServiceConnected 可能未触发），立即检测会误报"已关闭"。延迟 800ms
+            // 让服务完成绑定，instance 非空即判定已开启。
+            mainHandler.postDelayed({
+                if (isFinishing || isDestroyed) return@postDelayed
+                val accessibilityOk = PermissionUtil.isAccessibilityServiceEnabled(this)
+                if (!accessibilityOk || !overlayOk) {
+                    PermissionMaskState.shouldShow.value = true
+                }
+            }, 800)
         }
     }
 }

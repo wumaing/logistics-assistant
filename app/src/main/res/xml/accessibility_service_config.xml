@@ -6,5 +6,5 @@
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100"
-    android:packageNames="com.yymm.driver,com.yunmanman.driver"
+    android:packageNames="com.xiwei.logistics"
     android:settingsActivity="com.yymm.monitor.presentation.MainActivity" />

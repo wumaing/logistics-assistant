@@ -1,6 +1,7 @@
 package com.yymm.monitor.domain.service
 
 import android.animation.ValueAnimator
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -13,6 +14,10 @@ import android.view.animation.DecelerateInterpolator
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.yymm.monitor.domain.model.FloatingWindowState
 import com.yymm.monitor.domain.model.MonitorState
 import com.yymm.monitor.presentation.MainActivity
@@ -35,6 +40,7 @@ object FloatingWindowManager {
 
     private var windowManager: WindowManager? = null
     private var floatingView: ComposeView? = null
+    private var windowView: View? = null  // 实际 add 到 WindowManager 的容器（FrameLayout）
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isExpanded = false
 
@@ -52,7 +58,13 @@ object FloatingWindowManager {
     private val dragThresholdPx = 40 // 10dp @ density 4.0 的近似值，实际用 dpToPx(10)
 
     fun show(context: Context) {
-        if (floatingView != null) return // 已显示则不再添加
+        if (windowView != null) return // 已显示则不再添加
+        // 悬浮窗是系统窗口（WindowManager 层），不属于任何 Activity 视图树，
+        // Compose 需要 LifecycleOwner/SavedStateRegistryOwner，否则 setContent 崩溃
+        // （ViewTreeLifecycleOwner not found）。从 context 解出 Activity 显式绑定。
+        val activity = context.findActivity()
+        val lifecycleOwner: LifecycleOwner? = activity as? LifecycleOwner
+        val savedStateOwner: SavedStateRegistryOwner? = activity as? SavedStateRegistryOwner
         windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         layoutParams = WindowManager.LayoutParams().apply {
             width = WindowManager.LayoutParams.WRAP_CONTENT
@@ -85,7 +97,26 @@ object FloatingWindowManager {
                 )
             }
         }
-        windowManager?.addView(floatingView, layoutParams)
+        // 容器是 WindowManager 窗口的根，LifecycleOwner/SavedStateRegistryOwner 必须设在
+        // 容器上（ComposeView 是子 view，往父链找 owner 时从窗口根开始，设在子节点找不到）。
+        // 拖动用 DragInterceptFrameLayout 的 onInterceptTouchEvent 在 dispatch 阶段拦截：
+        // Compose 子视图会消费触摸，普通 OnTouchListener（在 onTouchEvent 阶段）收不到事件，
+        // 只有 onInterceptTouchEvent 能在 Compose 之前抢到拖动。
+        val container = DragInterceptFrameLayout(context, this).apply {
+            lifecycleOwner?.let { setViewTreeLifecycleOwner(it) }
+            savedStateOwner?.let { setViewTreeSavedStateRegistryOwner(it) }
+            addView(floatingView)
+        }
+        windowView = container
+        try {
+            windowManager?.addView(container, layoutParams)
+        } catch (t: Throwable) {
+            // 悬浮窗创建失败（如权限时序/系统限制）时清掉残留，避免下次 show 被 skip
+            android.util.Log.e("FloatWin", "addView FAILED: ${t}")
+            floatingView = null
+            windowView = null
+            layoutParams = null
+        }
         // 长按迷你球"隐藏悬浮窗"菜单回调
         FloatingWindowHideHandler.hideCallback = { hide() }
         // "导出节点树"调试回调
@@ -99,14 +130,14 @@ object FloatingWindowManager {
                 // 后台无 Activity 上下文时 Toast 可能抛异常，忽略
             }
         }
-        setupDragListener(floatingView!!, context)
     }
 
     fun hide() {
-        floatingView?.let {
+        windowView?.let {
             windowManager?.removeView(it)
-            floatingView = null
+            windowView = null
         }
+        floatingView = null
         FloatingWindowHideHandler.hideCallback = null
     }
 
@@ -146,57 +177,78 @@ object FloatingWindowManager {
         layoutParams?.let { lp ->
             lp.width = if (isExpanded) dpToPx(context, expandedWidthDp)
             else WindowManager.LayoutParams.WRAP_CONTENT
-            floatingView?.let { view ->
+            windowView?.let { view ->
                 windowManager?.updateViewLayout(view, lp)
             }
         }
     }
 
-    private fun setupDragListener(view: View, context: Context) {
-        view.setOnTouchListener { v, event ->
-            when (event.action) {
+    /**
+     * 拖动拦截容器。
+     *
+     * 悬浮窗内是 ComposeView，Compose 的 AndroidComposeView 会消费大部分触摸事件
+     * （点击/滑动都进 Compose 手势），普通 View.setOnTouchListener 设在容器上时，
+     * 事件已被子 ComposeView 消费，父层 onTouchEvent 收不到 → 无法拖动。
+     * 用 onInterceptTouchEvent 在 dispatch 阶段拦截：一旦检测到拖动意图
+     * （移动距离超过阈值），拦截该事件序列，后续 MOVE 直接由本容器处理并更新窗口位置，
+     * Compose 完全感知不到；未触发拖动阈值的 DOWN/MOVE 原样放行给 Compose（正常点击展开）。
+     */
+    private class DragInterceptFrameLayout(
+        context: Context,
+        private val owner: FloatingWindowManager
+    ) : android.widget.FrameLayout(context) {
+
+        private var intercepted = false
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            return when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    initialX = layoutParams?.x?.toFloat() ?: 0f
-                    initialY = layoutParams?.y?.toFloat() ?: 0f
-                    touchX = event.rawX
-                    touchY = event.rawY
-                    isDragging = false
-                    true
+                    owner.initialX = owner.layoutParams?.x?.toFloat() ?: 0f
+                    owner.initialY = owner.layoutParams?.y?.toFloat() ?: 0f
+                    owner.touchX = ev.rawX
+                    owner.touchY = ev.rawY
+                    owner.isDragging = false
+                    intercepted = false
+                    false // 不拦截 DOWN，先让 Compose 有机会处理点击
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - touchX
-                    val dy = event.rawY - touchY
-                    if (kotlin.math.abs(dx) > dpToPx(context, 10).toFloat() ||
-                        kotlin.math.abs(dy) > dpToPx(context, 10).toFloat()
-                    ) {
-                        isDragging = true
+                    val dx = ev.rawX - owner.touchX
+                    val dy = ev.rawY - owner.touchY
+                    val threshold = (context.resources.displayMetrics.density * 10).toFloat()
+                    if (!intercepted && (kotlin.math.abs(dx) > threshold || kotlin.math.abs(dy) > threshold)) {
+                        // 超过拖动阈值 → 拦截，进入拖动模式
+                        intercepted = true
+                        owner.isDragging = true
                     }
-                    if (isDragging) {
-                        layoutParams?.let { lp ->
-                            lp.x = (initialX + dx).toInt()
-                            lp.y = (initialY + dy).toInt()
-                            windowManager?.updateViewLayout(v, lp)
-                        }
-                    }
-                    true
+                    intercepted
                 }
-                MotionEvent.ACTION_UP -> {
-                    val dx = event.rawX - touchX
-                    val dy = event.rawY - touchY
-                    val moved = kotlin.math.abs(dx) > dpToPx(context, 10).toFloat() ||
-                        kotlin.math.abs(dy) > dpToPx(context, 10).toFloat()
-                    if (!moved) {
-                        // 点击（移动距离 < 10dp）→ 展开/收起
-                        v.performClick()
-                        toggleExpand(context)
-                    } else {
-                        // 拖动结束 → 贴边动画
-                        snapToEdge(context, v)
-                    }
-                    true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    owner.isDragging = false
+                    intercepted
                 }
                 else -> false
             }
+        }
+
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            if (intercepted) {
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> {
+                        val lp = owner.layoutParams ?: return true
+                        lp.x = (owner.initialX + (ev.rawX - owner.touchX)).toInt()
+                        lp.y = (owner.initialY + (ev.rawY - owner.touchY)).toInt()
+                        owner.windowManager?.updateViewLayout(this, lp)
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        intercepted = false
+                        owner.snapToEdge(context, this)
+                        return true
+                    }
+                    else -> return false
+                }
+            }
+            return super.onTouchEvent(ev)
         }
     }
 
@@ -233,4 +285,14 @@ object FloatingWindowManager {
 
     private fun dpToPx(context: Context, dp: Int): Int =
         (dp * context.resources.displayMetrics.density).toInt()
+
+    /** 从 Context 向上解出 Activity（ContextWrapper 可能多层包一层 ServiceContext） */
+    private fun Context.findActivity(): Activity? {
+        var ctx = this
+        while (ctx is android.content.ContextWrapper) {
+            if (ctx is Activity) return ctx
+            ctx = ctx.baseContext
+        }
+        return null
+    }
 }

@@ -22,18 +22,33 @@ object PermissionUtil {
      * 遍历系统已启用的无障碍服务，匹配本应用包名 + YymmMonitorService 类名。
      */
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        val expectedComponent = "${context.packageName}/${YymmMonitorService::class.java.name}"
+        // 最强信号：服务实例已连接（onServiceConnected 已执行）→ 无障碍必定开启
+        if (YymmMonitorService.instance != null) return true
+        // 次选：官方 API 检测
         val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE)
             ?: return false
-        val expectedComponent = "${context.packageName}/${YymmMonitorService::class.java.name}"
         try {
             val enabledServices = (manager as android.view.accessibility.AccessibilityManager)
                 .getEnabledAccessibilityServiceList(AccessibilityEvent.TYPES_ALL_MASK)
-            return enabledServices.any { info ->
+            val matched = enabledServices.any { info ->
                 val serviceInfo = info.resolveInfo.serviceInfo
                 "${serviceInfo.packageName}/${serviceInfo.name}" == expectedComponent
             }
+            if (matched) return true
         } catch (_: Exception) {
-            return false
+            // 官方 API 异常时降级到 Settings.Secure 检测
+        }
+        // 兜底：读系统持久化的 enabled_accessibility_services（OPPO/ColorOS 上官方 API
+        // 可能在服务刚启用尚未绑定事件时返回空，用 Settings 校验更稳）
+        return try {
+            val enabled = android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            enabled.split(':').any { it == expectedComponent }
+        } catch (_: Exception) {
+            false
         }
     }
 

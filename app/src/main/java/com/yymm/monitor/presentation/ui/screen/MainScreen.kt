@@ -289,8 +289,8 @@ private fun EmptyHint(text: String) {
 private fun startMonitoring(context: Context) {
     // 显示悬浮窗
     FloatingWindowManager.show(context)
-    // 尝试启动运满满
-    listOf("com.yymm.driver", "com.yunmanman.driver").forEach { pkg ->
+    // 尝试启动司机端
+    listOf("com.xiwei.logistics", "com.yymm.driver", "com.yunmanman.driver").forEach { pkg ->
         context.packageManager.getLaunchIntentForPackage(pkg)?.let {
             it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(it)

@@ -30,7 +30,7 @@ class PageDetector @Inject constructor() {
         // 1. 包名检测
         val packageName = event?.packageName?.toString() ?: rootNode?.packageName?.toString()
         val packageOk = packageName?.let {
-            it.contains("com.yymm") || it.contains("yunmanman")
+            it.contains("com.xiwei.logistics") || it.contains("com.yymm") || it.contains("yunmanman")
         } == true
         if (packageOk) {
             checksPassed++
