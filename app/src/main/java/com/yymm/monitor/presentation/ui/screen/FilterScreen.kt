@@ -448,12 +448,16 @@ fun FilterScreen(
 private fun sameLocation(a: LocationRule, b: LocationRule): Boolean =
     a.province == b.province && a.city == b.city && a.district == b.district
 
-/** 顶部 Tab（出发地/目的地）：激活项红色文字 + 红色下划线指示器 */
+/** 顶部 Tab（出发地/目的地）：激活项红色文字 + 红色下划线指示器（Row 内均分） */
 @Composable
-private fun FilterTab(text: String, selected: Boolean, onClick: () -> Unit) {
+private fun androidx.compose.foundation.layout.RowScope.FilterTab(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
     Column(
         modifier = Modifier
-            .fillMaxWidth()
+            .weight(1f) // Row 内均分宽度，两个 Tab 各占一半
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally

@@ -69,7 +69,7 @@ fun AlertSettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            // 刷新间隔（用户自定）
+            // 刷新间隔（用户自定，点击即保存）
             Text("⏱ 刷新间隔（监控轮询频率）", fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(4.dp))
             Row(
@@ -80,7 +80,10 @@ fun AlertSettingsScreen(
                     IntervalOption(
                         label = label,
                         selected = settings.refreshIntervalSeconds == sec,
-                        onClick = { viewModel.updateRefreshInterval(sec) }
+                        onClick = {
+                            viewModel.updateRefreshInterval(sec)
+                            viewModel.saveSettings() // 点击即生效
+                        }
                     )
                 }
             }
@@ -92,7 +95,7 @@ fun AlertSettingsScreen(
             )
             Spacer(Modifier.height(16.dp))
 
-            // 匹配方式（真人自定）
+            // 匹配方式（真人自定，点击即保存）
             Text("🎯 匹配方式", fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(4.dp))
             Row(
@@ -102,12 +105,18 @@ fun AlertSettingsScreen(
                 IntervalOption(
                     label = "包含下级",
                     selected = settings.matchMode != "EXACT",
-                    onClick = { viewModel.updateMatchMode("INCLUDE_CHILDREN") }
+                    onClick = {
+                        viewModel.updateMatchMode("INCLUDE_CHILDREN")
+                        viewModel.saveSettings() // 点击即生效
+                    }
                 )
                 IntervalOption(
                     label = "同层精确",
                     selected = settings.matchMode == "EXACT",
-                    onClick = { viewModel.updateMatchMode("EXACT") }
+                    onClick = {
+                        viewModel.updateMatchMode("EXACT")
+                        viewModel.saveSettings() // 点击即生效
+                    }
                 )
             }
             Spacer(Modifier.height(4.dp))

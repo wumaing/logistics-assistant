@@ -74,15 +74,41 @@ class YymmMonitorService : AccessibilityService() {
     private val _stats = MutableStateFlow(MonitorStats())
     val stats: StateFlow<MonitorStats> = _stats.asStateFlow()
 
+    /** 写诊断日志到 files/monitor_log.txt（ColorOS 过滤 logcat，用文件绕开） */
+    private fun diagLog(msg: String) {
+        try {
+            val f = java.io.File(filesDir, "monitor_log.txt")
+            f.appendText("[${System.currentTimeMillis()}] $msg\n")
+        } catch (_: Exception) {}
+    }
+
+    /** 递归收集节点树全部文本（诊断司机端可访问性） */
+    private fun collectAllTexts(node: android.view.accessibility.AccessibilityNodeInfo): List<String> {
+        val out = mutableListOf<String>()
+        try {
+            node.text?.toString()?.let { if (it.isNotBlank()) out.add(it) }
+            node.contentDescription?.toString()?.let { if (it.isNotBlank()) out.add(it) }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { child ->
+                    out.addAll(collectAllTexts(child))
+                }
+            }
+        } catch (_: Exception) {}
+        return out
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        diagLog("onServiceConnected 无障碍服务已连接")
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_SCROLLED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            // 手势能力由 accessibility_service_config.xml 的 canPerformGestures="true" 声明
+            // （系统绑定服务时解析 XML 授予 CAPABILITY_CAN_PERFORM_GESTURES）
         }
         // 启动即就绪：无障碍服务连接后自动进入 READY（悬浮窗显示"开始监控"），
         // 无需额外等待。用户点击"开始"即进入 RUNNING 开始轮询匹配。
@@ -93,6 +119,17 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        // 诊断：事件是否带文本（司机端 root 拿不到时，事件文本是唯一来源）
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            val evTexts = (event.text?.filter { it.isNotBlank() } ?: emptyList()) +
+                (event.contentDescription?.let { listOf(it) } ?: emptyList())
+            if (evTexts.isNotEmpty()) {
+                diagLog("事件文本(${event.packageName}): ${evTexts.take(5).joinToString(" | ")}")
+            }
+        }
+        diagLog("onAccessibilityEvent type=${event.eventType} pkg=${event.packageName}")
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 // 不自动暂停：由真人判断页面是否正确。窗口切换不中断监控，
@@ -113,6 +150,16 @@ class YymmMonitorService : AccessibilityService() {
 
     override fun onInterrupt() {
         pauseMonitoring("无障碍服务被中断")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 支持通过 startService 触发监控控制（悬浮窗/测试用）
+        when (intent?.action) {
+            ACTION_START_MONITOR -> startMonitoring()
+            ACTION_PAUSE_MONITOR -> pauseMonitoring("用户暂停")
+            ACTION_RESUME_MONITOR -> startMonitoring()
+        }
+        return START_STICKY
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -152,6 +199,7 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     fun startMonitoring() {
+        diagLog("startMonitoring 调用，当前状态=${_monitorState.value}")
         if (_monitorState.value == MonitorState.RUNNING) return
         // 不校验当前页面：真人主动打开运满满司机页后点"开始监控"，
         // 助手直接进入 RUNNING 开始轮询刷新+解析+匹配，由真人判断页面是否正确。
@@ -159,6 +207,7 @@ class YymmMonitorService : AccessibilityService() {
         FloatingWindowManager.updateState(MonitorState.RUNNING)
         serviceScope.launch { syncActiveRulesToFloat() }
         startRefreshLoop()
+        diagLog("startMonitoring 完成，已启动轮询")
     }
 
     fun pauseMonitoring(reason: String = "用户手动暂停") {
@@ -228,8 +277,18 @@ class YymmMonitorService : AccessibilityService() {
      * 不做页面校验：真人主动判断页面是否正确，助手只负责刷新与匹配。
      */
     private suspend fun doRefreshCycle() {
+        diagLog("doRefreshCycle 开始")
+        // 仅当司机端在前台时刷新（root 可访问）；非司机端跳过本轮但不暂停
+        val preRoot = captureRootOnMainThread()
+        val frontPkg = preRoot?.packageName?.toString()
+        preRoot?.recycle()
+        if (frontPkg == null || !frontPkg.contains("xiwei")) {
+            diagLog("doRefreshCycle 前台非司机端($frontPkg)，跳过本轮")
+            return
+        }
         // 1. 下拉刷新
         val refreshOk = performRefresh()
+        diagLog("performRefresh 结果=$refreshOk")
         _stats.value = _stats.value.copy(refreshCount = _stats.value.refreshCount + 1)
         if (!refreshOk) return
         delay(1000)
@@ -247,15 +306,16 @@ class YymmMonitorService : AccessibilityService() {
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
-        // 从屏高 25% 滑到 85%（约 60% 屏高的下拉幅度），居中横坐标
-        val startY = (screenHeight * 0.25f).toInt().coerceAtLeast(0)
-        val endY = (screenHeight * 0.85f).toInt().coerceAtMost(screenHeight - 1)
+        // 从屏高 20% 滑到 65%（约 45% 屏高的下拉幅度，接近真人下拉；过长的路径
+        // 在部分机型会被系统判定无效导致 onCancelled）
+        val startY = (screenHeight * 0.20f).toInt().coerceAtLeast(0)
+        val endY = (screenHeight * 0.65f).toInt().coerceAtMost(screenHeight - 1)
         val path = Path().apply {
             moveTo(screenWidth / 2f, startY.toFloat())
             lineTo(screenWidth / 2f, endY.toFloat())
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 400))
             .build()
         val deferred = CompletableDeferred<Boolean>()
         refreshHandler.post {
@@ -265,11 +325,12 @@ class YymmMonitorService : AccessibilityService() {
                 }
 
                 override fun onCancelled(gestureDescription: GestureDescription?) {
+                    diagLog("performRefresh 手势被取消")
                     deferred.complete(false)
                 }
             }, refreshHandler)
         }
-        return withTimeoutOrNull(3000) { deferred.await() } ?: false
+        return withTimeoutOrNull(5000) { deferred.await() } ?: false
     }
 
     /**
@@ -298,11 +359,31 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     private suspend fun parseAndMatch() {
-        val rootNode = captureRootOnMainThread() ?: return
+        // root 获取失败时重试（getRootInActiveWindow 在刷新/窗口切换后可能短暂不可用）
+        var node: AccessibilityNodeInfo? = null
+        repeat(3) { attempt ->
+            node = captureRootOnMainThread()
+            if (node != null) return@repeat
+            diagLog("parseAndMatch root=null 第${attempt + 1}次重试")
+            delay(500)
+        }
+        val rootNode = node
+        if (rootNode == null) {
+            diagLog("parseAndMatch root=null 无法取节点（重试3次后放弃）")
+            return
+        }
         try {
+            // 诊断：root 节点的基本信息（确认司机端节点树是否为空）
+            val texts = collectAllTexts(rootNode)
+            diagLog("parseAndMatch root: pkg=${rootNode.packageName} cls=${rootNode.className} child=${rootNode.childCount} 文本数=${texts.size}")
+            if (texts.isNotEmpty()) {
+                diagLog("parseAndMatch 文本前5条: ${texts.take(5).joinToString(" | ")}")
+            }
             val orders = orderParser.parse(rootNode)
+            diagLog("parseAndMatch 解析到 ${orders.size} 个订单")
             orders.forEach { order ->
                 if (ruleEngine.match(order) && !alertManager.isAlertedToday(order.id)) {
+                    diagLog("匹配成功并提醒: ${order.fromProvince}${order.fromCity} → ${order.toProvince}${order.toCity}")
                     alertManager.triggerAlert(order)
                     _stats.value = _stats.value.copy(
                         matchCount = _stats.value.matchCount + 1

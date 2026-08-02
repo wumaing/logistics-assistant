@@ -47,6 +47,11 @@ object PermissionMaskState {
     val shouldShow = MutableStateFlow(false)
 }
 
+/** 服务未真正连接提示（OPPO 重装后无障碍显示启用但未绑定） */
+object ReconnectServiceState {
+    val shouldShow = MutableStateFlow(false)
+}
+
 /** 悬浮窗快捷入口导航事件：singleTask 复用 MainActivity 时，用事件驱动 NavController 跳转 */
 object NavigationEvent {
     val route = MutableStateFlow<String?>(null)
@@ -120,6 +125,14 @@ class MainActivity : ComponentActivity() {
                         PermissionMaskState.shouldShow.value = false
                     })
                 }
+
+                // 服务显示启用但未真正连接（OPPO 重装后）→ 引导重新开关
+                val showReconnect by ReconnectServiceState.shouldShow.collectAsStateWithLifecycle()
+                if (showReconnect) {
+                    ReconnectMask(onDismiss = {
+                        ReconnectServiceState.shouldShow.value = false
+                    })
+                }
             }
         }
     }
@@ -155,6 +168,10 @@ class MainActivity : ComponentActivity() {
                 val accessibilityOk = PermissionUtil.isAccessibilityServiceEnabled(this)
                 if (!accessibilityOk || !overlayOk) {
                     PermissionMaskState.shouldShow.value = true
+                } else if (PermissionUtil.isServiceRegisteredButNotConnected(this)) {
+                    // OPPO 重装后：settings 显示已启用但服务未真正连接（Bound services 空）
+                    // 提示用户重新开关一次无障碍，监控才能工作
+                    ReconnectServiceState.shouldShow.value = true
                 }
             }, 800)
         }
@@ -219,6 +236,73 @@ private fun PermissionMask(onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("稍后再说")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 服务未真正连接遮罩（OPPO 重装后）：
+ * "无障碍显示已启用但未连接，请重新开关一次" + 去设置按钮
+ */
+@Composable
+private fun ReconnectMask(onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(300)
+        visible = true
+    }
+
+    if (!visible) return
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "无障碍服务未完全连接",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFF44336)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "系统显示已开启，但服务尚未激活。\n请到设置中关闭再重新开启「浏览助手」无障碍开关。",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = {
+                        PermissionUtil.openAccessibilitySettings(context)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
+                ) {
+                    Text("去设置")
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("知道了")
                 }
             }
         }

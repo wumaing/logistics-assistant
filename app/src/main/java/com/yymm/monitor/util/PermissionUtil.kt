@@ -52,6 +52,30 @@ object PermissionUtil {
         }
     }
 
+    /**
+     * 服务是否「显示已启用但实际未连接」。
+     *
+     * OPPO 重装 APK 后：settings 保留 enabled 记录，但系统不重新 bind 服务
+     * （Bound services 为空），导致 isAccessibilityServiceEnabled 返回 true
+     * 但 onServiceConnected 从未触发、监控不工作。此方法用于检测该异常状态，
+     * 返回 true 时引导用户重新开关一次无障碍。
+     */
+    fun isServiceRegisteredButNotConnected(context: Context): Boolean {
+        // 已连接 → 正常
+        if (YymmMonitorService.instance != null) return false
+        // settings 里显示启用但服务未连接 → 异常
+        val expectedComponent = "${context.packageName}/${YymmMonitorService::class.java.name}"
+        return try {
+            val enabled = android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            enabled.split(':').any { it == expectedComponent }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /** 检查悬浮窗权限是否已授予 */
     fun isFloatingWindowAllowed(context: Context): Boolean =
         Settings.canDrawOverlays(context)
