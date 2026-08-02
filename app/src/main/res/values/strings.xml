@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">浏览助手</string>
+    <string name="accessibility_service_label">浏览助手</string>
+    <string name="accessibility_service_description">浏览助手需要无障碍权限来读取运满满订单列表信息，不会执行任何自动点击操作</string>
+    <string name="foreground_service_type_special_use_subtype">浏览助手用于观察运满满订单并提醒用户，不执行任何自动操作</string>
+</resources>

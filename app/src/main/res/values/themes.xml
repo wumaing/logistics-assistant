@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 基础主题：Material3 DayNight，无 ActionBar -->
+    <style name="Theme.YymmMonitor" parent="Theme.Material3.DayNight.NoActionBar" />
+
+    <!-- 透明主题：用于悬浮提醒弹窗 -->
+    <style name="Theme.YymmMonitor.Transparent" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标前景：一个简约的眼睛图形，象征"观察/浏览" -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,40 C42,40 32,49 30,54 C32,59 42,68 54,68 C66,68 76,59 78,54 C76,49 66,40 54,40 Z" />
+    <path
+        android:fillColor="#FF1E5E8A"
+        android:pathData="M54,46 C49.6,46 46,49.6 46,54 C46,58.4 49.6,62 54,62 C58.4,62 62,58.4 62,54 C62,49.6 58.4,46 54,46 Z" />
+</vector>

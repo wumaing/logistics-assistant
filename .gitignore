@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+
+# 模块级构建产物
+app/build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.ipr
+*.iws
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Android
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# 日志
+*.log
+
+# macOS
+.DS_Store
+
+# 系统
+Thumbs.db
