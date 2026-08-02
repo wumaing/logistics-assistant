@@ -70,9 +70,11 @@ android {
 
     testOptions {
         unitTests.all {
-            // 项目路径含中文（d:\huihua\浏览助手），Gradle worker classpath argfile 以 UTF-8 写入，
-            // JVM 默认 sun.jnu.encoding=GBK 解码导致中文路径乱码、测试类 ClassNotFound。
-            // 强制 worker 以 UTF-8 解码文件名，修复中文路径下的单测执行。
+            // 项目路径含中文（d:\huihua\浏览助手）。
+            // 该 JVM 参数对 Windows 上 JDK 18+ 无效（sun.jnu.encoding 原生只读），
+            // 测试在中文路径下运行会 ClassNotFound（Gradle 已知限制）。
+            // 已验证：将项目复制到 ASCII 路径（如 d:/huihua_ascii）后 testDebugUnitTest 全部通过。
+            // 真正根治需：项目迁到无中文目录，或系统开启"Beta: 使用 Unicode UTF-8 提供全球语言支持"。
             it.jvmArgs("-Dsun.jnu.encoding=UTF-8")
         }
     }

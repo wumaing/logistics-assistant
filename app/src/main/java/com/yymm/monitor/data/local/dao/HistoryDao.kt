@@ -18,6 +18,9 @@ interface HistoryDao {
     @Query("SELECT orderId FROM history_records WHERE date = :date")
     suspend fun getOrderIdsByDate(date: String): List<String>
 
+    @Query("UPDATE history_records SET action = :action WHERE orderId = :orderId AND date = :date")
+    suspend fun updateAction(orderId: String, action: String, date: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(record: HistoryRecordEntity)
 

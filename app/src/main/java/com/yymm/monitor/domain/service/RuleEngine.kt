@@ -27,6 +27,9 @@ class RuleEngine @Inject constructor(
         return activeRules.any { rule -> matchOrderWithRule(order, rule) }
     }
 
+    /** 获取全部激活规则（用于悬浮窗"当前匹配规则"汇总展示） */
+    suspend fun activeRules(): List<MatchRuleEntity> = ruleRepository.getActiveRules()
+
     fun matchOrderWithRule(order: ParsedOrder, rule: MatchRuleEntity): Boolean {
         if (rule.ruleStatus != "ACTIVE") return false
 

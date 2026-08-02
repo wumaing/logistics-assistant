@@ -201,22 +201,76 @@ class OrderParser @Inject constructor() {
         return (CARGO_TYPE_TAGS + EXTRA_TAGS).filter { tag -> texts.any { it.contains(tag) } }
     }
 
+    /**
+     * 订单 id 生成：只基于订单内容（出发地/目的地/货物/重量）做 MD5。
+     *
+     * 之前拼接了 `时间戳/60000`（分钟粒度），导致同一订单在界面停留跨分钟边界后会
+     * 被当成新订单重新提醒；内容不变则 id 不变，配合 AlertManager 的当日去重稳定生效。
+     */
     private fun generateOrderId(
         from: Pair<String, String?>,
         to: Pair<String, String?>,
         cargo: String?,
-        weight: Pair<Float, Float>?,
-        timestamp: Long = System.currentTimeMillis()
+        weight: Pair<Float, Float>?
     ): String {
-        val raw = "${from.first}${from.second}_${to.first}${to.second}_${cargo}_${weight?.first}_${timestamp / 60000}"
+        val raw = "${from.first}${from.second}_${to.first}${to.second}_${cargo}_${weight?.first}_${weight?.second}"
         return MessageDigest.getInstance("MD5").run {
             update(raw.toByteArray())
             BigInteger(1, digest()).toString(16).take(16)
         }
     }
 
+    /**
+     * 兜底解析：无 RecyclerView/ListView 容器时，直接按文本特征把整棵节点树切成"候选订单块"。
+     *
+     * 运满满若用 NestedScrollView / 自绘容器 / Compose 化列表，[findListNodes] 找不到列表容器时，
+     * 这里不直接放弃——把所有"含出发→目的 箭头分隔"的文本节点当作一个订单 item 逐条解析，
+     * 至少保证监控不静默失效。箭头正则与 [extractLocations] 保持一致。
+     */
     private fun parseByTextFeatures(root: AccessibilityNodeInfo): List<ParsedOrder> {
-        // 后续步骤实现：无 RecyclerView 时按文本特征分块解析
-        return emptyList()
+        val arrowPattern = Regex("""([一-龥]+)\s*([一-龥]+)?\s*[->~]{1,2}\s*([一-龥]+)\s*([一-龥]+)?""")
+        val orders = mutableListOf<ParsedOrder>()
+        val texts = extractAllTexts(root)
+        // 找所有含地点箭头的文本节点作为候选订单锚点
+        val candidates = texts.filter { arrowPattern.containsMatchIn(it) }
+        // 对每个候选订单文本，构造一个轻量 item 节点解析（复用 extract* 正则）
+        for (text in candidates) {
+            try {
+                val (from, to) = extractLocations(listOf(text)) ?: continue
+                val cargo = extractCargo(texts)
+                val weight = extractWeight(texts)
+                val lengths = extractVehicleLengths(texts)
+                val types = extractVehicleTypes(texts)
+                val (priceAmount, priceText, isDianyi) = extractPrice(texts)
+                val loadTime = extractLoadTime(texts)
+                val distance = extractDistance(texts)
+                val tags = extractTags(texts)
+                val id = generateOrderId(from, to, cargo, weight)
+                orders.add(
+                    ParsedOrder(
+                        id = id,
+                        fromProvince = from.first,
+                        fromCity = from.second,
+                        toProvince = to.first,
+                        toCity = to.second,
+                        cargoName = cargo,
+                        weightMin = weight?.first,
+                        weightMax = weight?.second,
+                        vehicleLengths = lengths,
+                        vehicleTypes = types,
+                        priceAmount = priceAmount,
+                        priceText = priceText,
+                        isDianyi = isDianyi,
+                        loadTimeText = loadTime ?: "",
+                        distance = distance,
+                        tags = tags,
+                        rawTexts = listOf(text)
+                    )
+                )
+            } catch (_: Exception) {
+                // 单条解析失败跳过，不中断整体
+            }
+        }
+        return orders
     }
 }

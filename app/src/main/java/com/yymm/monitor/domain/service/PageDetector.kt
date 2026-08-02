@@ -29,8 +29,15 @@ class PageDetector @Inject constructor() {
 
         // 1. 包名检测
         val packageName = event?.packageName?.toString() ?: rootNode?.packageName?.toString()
-        if (packageName?.contains("com.yymm") == true || packageName?.contains("yunmanman") == true) {
+        val packageOk = packageName?.let {
+            it.contains("com.yymm") || it.contains("yunmanman")
+        } == true
+        if (packageOk) {
             checksPassed++
+        } else {
+            // 快速排除：当前窗口明显不是运满满（包名存在但不匹配）→ 直接判定不是订单页
+            // 兜底 packageName 为空时（如 root 尚未就绪）继续走特征检测
+            if (packageName != null) return false
         }
 
         // 2. Activity 类名检测（白名单空时视为通过）
@@ -44,7 +51,7 @@ class PageDetector @Inject constructor() {
         if (rootNode != null) {
             collectTexts(rootNode, allTexts)
         }
-        if (allTexts.any { text -> featureKeywords.any { text.contains(it) } }) {
+        if (allTexts.any { text -> featureKeywords.any { it in text } }) {
             checksPassed++
         }
 

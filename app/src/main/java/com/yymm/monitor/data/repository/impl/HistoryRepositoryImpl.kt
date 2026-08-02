@@ -51,10 +51,13 @@ class HistoryRepositoryImpl @Inject constructor(
         )
     }
 
+    /**
+     * 记录用户对订单的动作（VIEWED / IGNORED）。
+     *
+     * 更新原 ALERTED 行，而不是插入新行，避免历史里同单出现两条记录。
+     */
     override suspend fun recordAction(orderId: String, action: AlertAction) {
-        val existing = historyDao.getByDate(today())
-            .firstOrNull { it.orderId == orderId } ?: return
-        historyDao.insert(existing.copy(action = action.name))
+        historyDao.updateAction(orderId, action.name, today())
     }
 
     override suspend fun cleanupOldRecords(retentionDays: Int) {

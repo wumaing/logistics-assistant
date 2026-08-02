@@ -17,12 +17,15 @@ data class LocationRule(
      *
      * @param orderProvince 订单省份
      * @param orderCity 订单城市，可空
+     * @param orderDistrict 订单区县，可空。null 表示订单未解析出区县信息，此时不按区县卡（宽松，避免误杀）
      * @return province == "全国" 时恒为 true
      */
-    fun matches(orderProvince: String, orderCity: String?): Boolean {
+    fun matches(orderProvince: String, orderCity: String?, orderDistrict: String? = null): Boolean {
         if (province == "全国") return true
         if (province != orderProvince) return false
         if (city != null && city != orderCity) return false
+        // 区县级匹配：仅当规则和订单都提供了区县时才校验；任一未知则放行
+        if (district != null && orderDistrict != null && district != orderDistrict) return false
         return true
     }
 }

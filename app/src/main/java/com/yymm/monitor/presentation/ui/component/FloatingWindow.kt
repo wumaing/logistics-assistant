@@ -84,6 +84,13 @@ fun FloatingWindowContent(
                 onDismissRequest = { menuExpanded = false }
             ) {
                 DropdownMenuItem(
+                    text = { Text("导出节点树（调试）") },
+                    onClick = {
+                        menuExpanded = false
+                        FloatingWindowHideHandler.dumpNodeTree()
+                    }
+                )
+                DropdownMenuItem(
                     text = { Text("隐藏悬浮窗") },
                     onClick = {
                         menuExpanded = false
@@ -218,14 +225,16 @@ fun FloatingWindowContent(
 }
 
 /**
- * 悬浮窗隐藏处理器。
+ * 悬浮窗动作处理器。
  *
  * FloatingWindow.kt 无法直接引用 FloatingWindowManager（避免 UI 层依赖单例），
- * 由 YymmMonitorService 在初始化时注入 hide 回调。
+ * 由 YymmMonitorService 在初始化时注入 hide 回调；导出节点树回调也在此挂接。
  */
 object FloatingWindowHideHandler {
     var hideCallback: (() -> Unit)? = null
+    var dumpNodeTreeCallback: (() -> Unit)? = null
     fun hide() = hideCallback?.invoke()
+    fun dumpNodeTree() = dumpNodeTreeCallback?.invoke()
 }
 
 /** 状态颜色（PRD D.2）：绿=监控中, 红=暂停/错误, 黄=检测中, 灰=等待启动 */

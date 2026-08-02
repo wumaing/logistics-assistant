@@ -64,7 +64,8 @@ object FloatingWindowManager {
                 WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
             }
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             format = PixelFormat.TRANSLUCENT
             gravity = Gravity.TOP or Gravity.START
             // 默认位置：屏幕右侧，Y=400（留边距）
@@ -88,6 +89,17 @@ object FloatingWindowManager {
         windowManager?.addView(floatingView, layoutParams)
         // 长按迷你球"隐藏悬浮窗"菜单回调
         FloatingWindowHideHandler.hideCallback = { hide() }
+        // "导出节点树"调试回调
+        FloatingWindowHideHandler.dumpNodeTreeCallback = {
+            val path = YymmMonitorService.instance?.dumpNodeTree()
+            val message = if (path != null) "节点树已导出：\n$path"
+            else "导出失败：无障碍服务未连接或当前无窗口"
+            try {
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+                // 后台无 Activity 上下文时 Toast 可能抛异常，忽略
+            }
+        }
         setupDragListener(floatingView!!, context)
     }
 
