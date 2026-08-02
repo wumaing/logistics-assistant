@@ -64,6 +64,8 @@ android {
         disable += "KaptUsageInsteadOfKsp"
         // 自适应图标必须放 mipmap-anydpi-v26（移走会 AAPT 资源找不到），此警告为误报
         disable += "ObsoleteSdkInt"
+        // 电池白名单引导是本地个人工具的核心需求（不上架商店），PRD 明确要求
+        disable += "BatteryLife"
     }
 
     testOptions {
