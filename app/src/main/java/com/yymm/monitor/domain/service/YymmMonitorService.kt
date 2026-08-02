@@ -106,6 +106,7 @@ class YymmMonitorService : AccessibilityService() {
                 return@launch
             }
             _monitorState.value = MonitorState.RUNNING
+            FloatingWindowManager.updateState(MonitorState.RUNNING)
             startRefreshLoop()
         }
     }
@@ -172,6 +173,9 @@ class YymmMonitorService : AccessibilityService() {
                     )
                 }
             }
+            // 悬浮窗统计联动
+            val s = _stats.value
+            FloatingWindowManager.updateStats(s.refreshCount, s.matchCount, s.confirmCount)
         } finally {
             rootNode.recycle()
         }
