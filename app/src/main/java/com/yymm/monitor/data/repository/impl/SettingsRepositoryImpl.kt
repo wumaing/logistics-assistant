@@ -37,6 +37,8 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override fun getRefreshInterval(): Int = getSettings().refreshIntervalSeconds
 
+    override fun getMatchMode(): String = getSettings().matchMode
+
     override fun getAlertSettings(): AlertSettings {
         val s = getSettings()
         return AlertSettings(

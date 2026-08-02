@@ -7,6 +7,7 @@ package com.yymm.monitor.data.model
  */
 data class UserSettings(
     val refreshIntervalSeconds: Int = 5,
+    val matchMode: String = "INCLUDE_CHILDREN",  // INCLUDE_CHILDREN=包含下级匹配, EXACT=同层精确匹配
     val myVehicleLength: String? = null,
     val popupEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,

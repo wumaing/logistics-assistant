@@ -6,6 +6,7 @@ import com.yymm.monitor.data.model.LocationRule
 import com.yymm.monitor.data.model.ParsedOrder
 import com.yymm.monitor.data.model.WeightRange
 import com.yymm.monitor.data.repository.RuleRepository
+import com.yymm.monitor.data.repository.SettingsRepository
 import java.util.Calendar
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -18,7 +19,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class RuleEngine @Inject constructor(
-    private val ruleRepository: RuleRepository
+    private val ruleRepository: RuleRepository,
+    private val settingsRepository: SettingsRepository
 ) {
 
     suspend fun match(order: ParsedOrder): Boolean {
@@ -33,6 +35,9 @@ class RuleEngine @Inject constructor(
     fun matchOrderWithRule(order: ParsedOrder, rule: MatchRuleEntity): Boolean {
         if (rule.ruleStatus != "ACTIVE") return false
 
+        // 匹配模式：INCLUDE_CHILDREN=包含下级（选省匹配省内所有市区），EXACT=同层精确
+        val includeChildren = settingsRepository.getMatchMode() != "EXACT"
+
         val fromLocations = parseLocations(rule.fromLocationsJson)
         val toLocations = parseLocations(rule.toLocationsJson)
         val cargoTypes = parseStringList(rule.cargoTypesJson)
@@ -43,7 +48,7 @@ class RuleEngine @Inject constructor(
         // ========== 第一优先级：出发地与目的地 ==========
         // 1. 出发地匹配（OR）
         val fromMatch = fromLocations.isEmpty() ||
-            fromLocations.any { it.matches(order.fromProvince, order.fromCity) } ||
+            fromLocations.any { it.matches(order.fromProvince, order.fromCity, includeChildren = includeChildren) } ||
             parseStringList(rule.fromCustomPointsJson).any { point ->
                 order.rawTexts.any { it.contains(point) }
             }
@@ -51,7 +56,7 @@ class RuleEngine @Inject constructor(
 
         // 2. 目的地匹配（OR）
         val toMatch = toLocations.isEmpty() ||
-            toLocations.any { it.matches(order.toProvince, order.toCity) } ||
+            toLocations.any { it.matches(order.toProvince, order.toCity, includeChildren = includeChildren) } ||
             parseStringList(rule.toCustomPointsJson).any { point ->
                 order.rawTexts.any { it.contains(point) }
             }

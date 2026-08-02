@@ -69,6 +69,55 @@ fun AlertSettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
+            // 刷新间隔（用户自定）
+            Text("⏱ 刷新间隔（监控轮询频率）", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(3 to "3秒", 5 to "5秒", 10 to "10秒", 15 to "15秒", 30 to "30秒", 60 to "60秒").forEach { (sec, label) ->
+                    IntervalOption(
+                        label = label,
+                        selected = settings.refreshIntervalSeconds == sec,
+                        onClick = { viewModel.updateRefreshInterval(sec) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "刷新越快越及时但更耗电；建议 5-15 秒",
+                fontSize = 12.sp,
+                color = Color.Gray
+            )
+            Spacer(Modifier.height(16.dp))
+
+            // 匹配方式（真人自定）
+            Text("🎯 匹配方式", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                IntervalOption(
+                    label = "包含下级",
+                    selected = settings.matchMode != "EXACT",
+                    onClick = { viewModel.updateMatchMode("INCLUDE_CHILDREN") }
+                )
+                IntervalOption(
+                    label = "同层精确",
+                    selected = settings.matchMode == "EXACT",
+                    onClick = { viewModel.updateMatchMode("EXACT") }
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "包含下级：选山东省匹配省内所有市/区订单；同层精确：只匹配所选层级本身",
+                fontSize = 12.sp,
+                color = Color.Gray
+            )
+            Spacer(Modifier.height(16.dp))
+
             // 弹窗提醒
             SettingSwitchRow("📳 弹窗提醒", settings.popupEnabled) {
                 viewModel.updatePopupEnabled(it)
@@ -195,5 +244,19 @@ private fun RadioOption(label: String, selected: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Text(label, fontSize = 14.sp, color = if (selected) Color.Red else Color.Black)
+    }
+}
+
+/** 刷新间隔选项（小号单选） */
+@Composable
+private fun IntervalOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .border(1.dp, if (selected) Color(0xFFF44336) else Color.Gray, RoundedCornerShape(8.dp))
+            .background(if (selected) Color(0xFFFFEBEE) else Color.White, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Text(label, fontSize = 13.sp, color = if (selected) Color(0xFFF44336) else Color.Black)
     }
 }

@@ -16,6 +16,9 @@ interface SettingsRepository {
 
     fun getRefreshInterval(): Int
 
+    /** 匹配模式：INCLUDE_CHILDREN=包含下级匹配, EXACT=同层精确匹配 */
+    fun getMatchMode(): String
+
     fun getAlertSettings(): AlertSettings
 
     fun getPopupDuration(): Int

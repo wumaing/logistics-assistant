@@ -42,6 +42,7 @@ class SettingsViewModel @Inject constructor(
     fun updatePopupDuration(seconds: Int) = update { it.copy(popupDurationSeconds = seconds) }
     fun updateMultiOrderHandling(mode: String) = update { it.copy(multiOrderHandling = mode) }
     fun updateRefreshInterval(seconds: Int) = update { it.copy(refreshIntervalSeconds = seconds) }
+    fun updateMatchMode(mode: String) = update { it.copy(matchMode = mode) }
 
     fun saveSettings() {
         viewModelScope.launch {

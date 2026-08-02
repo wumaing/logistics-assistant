@@ -56,7 +56,6 @@ class YymmMonitorService : AccessibilityService() {
     @Inject lateinit var ruleEngine: RuleEngine
     @Inject lateinit var alertManager: AlertManager
     @Inject lateinit var settingsRepo: SettingsRepository
-    @Inject lateinit var pageDetector: PageDetector
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshHandler = Handler(Looper.getMainLooper())
@@ -96,14 +95,8 @@ class YymmMonitorService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                serviceScope.launch {
-                    val rootNode = captureRootOnMainThread()
-                    val isOrderPage = pageDetector.isOrderListPage(event, rootNode)
-                    rootNode?.recycle()
-                    if (!isOrderPage && _monitorState.value == MonitorState.RUNNING) {
-                        pauseMonitoring("运满满页面已切换")
-                    }
-                }
+                // 不自动暂停：由真人判断页面是否正确。窗口切换不中断监控，
+                // 轮询继续尝试刷新解析（在司机页时正常，切出时手势可能失败自动跳过）
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 // 事件驱动解析：用户在运满满内滚动列表时立即抓取，与定时轮询互补（节流 800ms 防刷屏）
@@ -134,23 +127,38 @@ class YymmMonitorService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
+    /**
+     * 持续运行：服务被系统杀死后自动重启。
+     *
+     * OPPO/ColorOS 会回收后台服务进程。若服务在监控运行中被杀，
+     * onDestroy 里启动一个普通的 startService（非 bind），让服务进程
+     * 重新拉起（AccessibilityService 由系统 bind，重启后 onServiceConnected
+     * 会再次触发，instance 恢复，监控可继续）。
+     */
+    override fun onDestroy() {
+        super.onDestroy()
+        // 服务被杀但用户仍希望监控（RUNNING/PAUSED 非 IDLE）→ 重启
+        val shouldRestart = _monitorState.value == MonitorState.RUNNING ||
+            _monitorState.value == MonitorState.PAUSED
+        instance = null
+        if (shouldRestart) {
+            try {
+                val intent = Intent(this, YymmMonitorService::class.java)
+                startService(intent)
+            } catch (_: Exception) {
+                // 后台启动受限（OPPO 限制），忽略
+            }
+        }
+    }
+
     fun startMonitoring() {
         if (_monitorState.value == MonitorState.RUNNING) return
-        _monitorState.value = MonitorState.CHECKING
-        serviceScope.launch {
-            val rootNode = captureRootOnMainThread()
-            val isOrderPage = pageDetector.isOrderListPage(null, rootNode)
-            rootNode?.recycle()
-            if (!isOrderPage) {
-                _monitorState.value = MonitorState.PAUSED
-                alertManager.showPageError("请打开运满满并保持订单列表页")
-                return@launch
-            }
-            _monitorState.value = MonitorState.RUNNING
-            FloatingWindowManager.updateState(MonitorState.RUNNING)
-            syncActiveRulesToFloat()
-            startRefreshLoop()
-        }
+        // 不校验当前页面：真人主动打开运满满司机页后点"开始监控"，
+        // 助手直接进入 RUNNING 开始轮询刷新+解析+匹配，由真人判断页面是否正确。
+        _monitorState.value = MonitorState.RUNNING
+        FloatingWindowManager.updateState(MonitorState.RUNNING)
+        serviceScope.launch { syncActiveRulesToFloat() }
+        startRefreshLoop()
     }
 
     fun pauseMonitoring(reason: String = "用户手动暂停") {
@@ -214,29 +222,19 @@ class YymmMonitorService : AccessibilityService() {
 
     /**
      * 单个刷新周期：
-     * 1. 取当前窗口 root，校验仍在运满满订单页（不依赖事件流，切出 App 立即暂停）
-     * 2. 下拉刷新（阻塞等待手势结果，失败跳过本轮解析）
-     * 3. 解析 + 匹配 + 提醒
+     * 1. 下拉刷新（阻塞等待手势结果，失败跳过本轮解析）
+     * 2. 解析 + 匹配 + 提醒
+     *
+     * 不做页面校验：真人主动判断页面是否正确，助手只负责刷新与匹配。
      */
     private suspend fun doRefreshCycle() {
-        // 1. 页面校验
-        val preRoot = captureRootOnMainThread()
-        val isOrderPage = pageDetector.isOrderListPage(null, preRoot)
-        preRoot?.recycle()
-        if (!isOrderPage) {
-            if (_monitorState.value == MonitorState.RUNNING) {
-                pauseMonitoring("运满满页面已切换")
-            }
-            return
-        }
-
-        // 2. 下拉刷新
+        // 1. 下拉刷新
         val refreshOk = performRefresh()
         _stats.value = _stats.value.copy(refreshCount = _stats.value.refreshCount + 1)
         if (!refreshOk) return
         delay(1000)
 
-        // 3. 解析匹配
+        // 2. 解析匹配
         parseAndMatch()
     }
 

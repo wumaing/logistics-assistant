@@ -68,6 +68,14 @@ class FilterViewModel @Inject constructor(
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    /** 层级规则提示（如"山东已包含济南，无需重复选择"） */
+    private val _toastMessage = MutableStateFlow<String?>(null)
+    val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
+
+    fun consumeToast() {
+        _toastMessage.value = null
+    }
+
     init {
         viewModelScope.launch {
             try {
@@ -90,15 +98,45 @@ class FilterViewModel @Inject constructor(
         }
     }
 
-    // ── 已选列表操作 ──
-    fun toggleSelected(rule: LocationRule) {
+    // ── 已选列表操作（层级包含规则） ──
+
+    /**
+     * 选择地区（层级互斥/包含规则）：
+     *
+     * 规则A：上级已选时，禁止再选下级 → Toast"山东已包含济南，无需重复选择"
+     * 规则B：下级已选时，选择上级则替换 → Toast"【济南】已替换【历下区】"
+     * 规则C：同级可多选
+     *
+     * @return true=选择生效；false=被规则A拦截（已包含，无操作）
+     */
+    fun toggleSelected(rule: LocationRule): Boolean {
         val selected = selectedList()
-        val newList = if (selected.any { sameLocation(it, rule) }) {
-            selected.filterNot { sameLocation(it, rule) }
+
+        // 已选相同的 → 取消选中
+        if (selected.any { sameLocation(it, rule) }) {
+            updateSelected(selected.filterNot { sameLocation(it, rule) })
+            return true
+        }
+
+        // 规则A：上级已选，禁止选下级
+        val coveredBy = selected.firstOrNull { covers(it, rule) }
+        if (coveredBy != null) {
+            _toastMessage.value = "${displayName(coveredBy)}已包含${displayName(rule)}，无需重复选择"
+            return false
+        }
+
+        // 规则B：下级已选，选上级 → 替换所有被包含的下级
+        val covered = selected.filter { covers(rule, it) }
+        val newList = if (covered.isNotEmpty()) {
+            val removed = selected.filterNot { covers(rule, it) }
+            val replacedNames = covered.joinToString("、") { displayName(it) }
+            _toastMessage.value = "【${displayName(rule)}】已替换【$replacedNames】"
+            removed + rule
         } else {
             selected + rule
         }
         updateSelected(newList)
+        return true
     }
 
     fun removeSelected(rule: LocationRule) {
@@ -108,6 +146,26 @@ class FilterViewModel @Inject constructor(
     fun clearSelected() {
         updateSelected(emptyList())
     }
+
+    /** 是否被包含：parent 包含 child（parent 是 child 的上级或同级） */
+    private fun covers(parent: LocationRule, child: LocationRule): Boolean {
+        // 全国包含一切
+        if (parent.province == "全国") return true
+        // 省级包含同省下级
+        if (parent.city == null && parent.district == null) {
+            return child.province == parent.province
+        }
+        // 市级包含同市下级
+        if (parent.district == null) {
+            return child.province == parent.province && child.city == parent.city
+        }
+        // 区级仅包含自身
+        return sameLocation(parent, child)
+    }
+
+    /** 地区显示名（含层级） */
+    private fun displayName(rule: LocationRule): String =
+        "${rule.province}${rule.city ?: ""}${rule.district ?: ""}"
 
     private fun selectedList(): List<LocationRule> =
         if (_activeTab.value == "FROM") _fromSelected.value else _toSelected.value
@@ -123,6 +181,12 @@ class FilterViewModel @Inject constructor(
     /** 同地判定：省/市/区完全相同即视为同一地 */
     private fun sameLocation(a: LocationRule, b: LocationRule): Boolean =
         a.province == b.province && a.city == b.city && a.district == b.district
+
+    /** 判断某地区是否已被上级包含（用于 UI 禁用态） */
+    fun isCoveredBySelection(rule: LocationRule): Boolean {
+        val selected = selectedList()
+        return selected.any { sel -> !sameLocation(sel, rule) && covers(sel, rule) }
+    }
 
     // ── 级联导航 ──
     fun selectProvince(province: Province?) {

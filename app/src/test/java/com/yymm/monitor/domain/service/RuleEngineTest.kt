@@ -2,10 +2,13 @@ package com.yymm.monitor.domain.service
 
 import com.google.gson.Gson
 import com.yymm.monitor.data.local.entity.MatchRuleEntity
+import com.yymm.monitor.data.model.AlertSettings
 import com.yymm.monitor.data.model.LocationRule
 import com.yymm.monitor.data.model.ParsedOrder
+import com.yymm.monitor.data.model.UserSettings
 import com.yymm.monitor.data.model.WeightRange
 import com.yymm.monitor.data.repository.RuleRepository
+import com.yymm.monitor.data.repository.SettingsRepository
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -23,6 +26,7 @@ class RuleEngineTest {
 
     private lateinit var engine: RuleEngine
     private lateinit var repo: FakeRuleRepository
+    private lateinit var settingsRepo: FakeSettingsRepository
 
     /** 用 runTest 运行 suspend match()，无需 Android 环境 */
     private class FakeRuleRepository : RuleRepository {
@@ -37,6 +41,28 @@ class RuleEngineTest {
         override suspend fun activateAll() {}
         override suspend fun deactivateAll() {}
         override suspend fun duplicateRule(ruleId: Long): Long = 0
+    }
+
+    /** 默认 INCLUDE_CHILDREN 匹配模式 */
+    private class FakeSettingsRepository : SettingsRepository {
+        var currentMatchMode = "INCLUDE_CHILDREN"
+        override fun getSettings() = UserSettings(matchMode = currentMatchMode)
+        override fun saveSettings(settings: UserSettings) { currentMatchMode = settings.matchMode }
+        override fun getRefreshInterval() = 5
+        override fun getMatchMode() = currentMatchMode
+        override fun getAlertSettings() = AlertSettings(
+            popupEnabled = true,
+            vibrateEnabled = true,
+            vibrateDurationMs = 3000,
+            ringtoneEnabled = true,
+            ringtoneUri = null,
+            ringtoneVolume = 1.0f,
+            ttsEnabled = true,
+            ttsSpeed = 1.0f
+        )
+        override fun getPopupDuration() = 0
+        override fun getMultiOrderHandling() = "QUEUE"
+        override fun getHistoryRetentionDays() = 7
     }
 
     private fun buildRule(
@@ -131,7 +157,8 @@ class RuleEngineTest {
     @Before
     fun setup() {
         repo = FakeRuleRepository()
-        engine = RuleEngine(repo)
+        settingsRepo = FakeSettingsRepository()
+        engine = RuleEngine(repo, settingsRepo)
     }
 
     // ─────────────────── OR 关系与空列表 ───────────────────
@@ -368,5 +395,43 @@ class RuleEngineTest {
     fun `STANDBY规则不参与匹配`() = runTest {
         repo.rules.add(buildRule(ruleStatus = "STANDBY"))
         assertFalse(engine.match(buildOrder()))
+    }
+
+    // ─────────────────── 匹配模式（包含下级/同层精确） ───────────────────
+
+    @Test
+    fun `包含下级模式_选省匹配省内城市订单`() = runTest {
+        settingsRepo.currentMatchMode = "INCLUDE_CHILDREN"
+        repo.rules.add(
+            buildRule(
+                fromLocationsJson = locationsJson(LocationRule(province = "山东"))
+            )
+        )
+        // 订单出发地：山东 济南 → 匹配（山东包含济南）
+        assertTrue(engine.match(buildOrder(fromProvince = "山东", fromCity = "济南")))
+    }
+
+    @Test
+    fun `同层精确模式_选省不匹配省内城市订单`() = runTest {
+        settingsRepo.currentMatchMode = "EXACT"
+        repo.rules.add(
+            buildRule(
+                fromLocationsJson = locationsJson(LocationRule(province = "山东"))
+            )
+        )
+        // 订单出发地：山东 济南 → 不匹配（精确模式只匹配省一级）
+        assertFalse(engine.match(buildOrder(fromProvince = "山东", fromCity = "济南")))
+    }
+
+    @Test
+    fun `省名规范化_带后缀也匹配`() = runTest {
+        settingsRepo.currentMatchMode = "INCLUDE_CHILDREN"
+        repo.rules.add(
+            buildRule(
+                fromLocationsJson = locationsJson(LocationRule(province = "山东"))
+            )
+        )
+        // 订单出发地：山东省 济南市 → 匹配（规范化后"山东"=="山东"）
+        assertTrue(engine.match(buildOrder(fromProvince = "山东省", fromCity = "济南市")))
     }
 }

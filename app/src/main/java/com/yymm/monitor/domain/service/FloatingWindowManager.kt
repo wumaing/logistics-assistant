@@ -111,12 +111,26 @@ object FloatingWindowManager {
         try {
             windowManager?.addView(container, layoutParams)
         } catch (t: Throwable) {
-            // 悬浮窗创建失败（如权限时序/系统限制）时清掉残留，避免下次 show 被 skip
+            // 悬浮窗创建失败（如 OPPO 应用刚回前台时禁止 addView overlay）时清掉残留，
+            // 并延迟重试——OPPO 在应用完全前台后允许创建
             android.util.Log.e("FloatWin", "addView FAILED: ${t}")
             floatingView = null
             windowView = null
             layoutParams = null
+            retryShow(context, 1)
         }
+        // OPPO/ColorOS 可能静默拦截 addView（不抛异常但窗口未挂上）：
+        // 延迟 500ms 验证窗口确实 attached，未挂上则清理重试
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val view = windowView ?: return@postDelayed
+            if (!view.isAttachedToWindow) {
+                android.util.Log.e("FloatWin", "addView silent-failed (not attached)")
+                floatingView = null
+                windowView = null
+                layoutParams = null
+                retryShow(context, 1)
+            }
+        }, 500)
         // 长按迷你球"隐藏悬浮窗"菜单回调
         FloatingWindowHideHandler.hideCallback = { hide() }
         // "导出节点树"调试回调
@@ -139,6 +153,14 @@ object FloatingWindowManager {
         }
         floatingView = null
         FloatingWindowHideHandler.hideCallback = null
+    }
+
+    /** OPPO/ColorOS 后台限制时延迟重试创建悬浮窗（最多 3 次，间隔 1s） */
+    private fun retryShow(context: Context, attempt: Int) {
+        if (attempt > 3) return
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            show(context)
+        }, 1000L * attempt)
     }
 
     fun updateState(state: MonitorState, message: String = "") {

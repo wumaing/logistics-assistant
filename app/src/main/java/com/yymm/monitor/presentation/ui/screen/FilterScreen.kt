@@ -78,6 +78,7 @@ fun FilterScreen(
     val searchResults by viewModel.searchResults.collectAsState()
     val history by viewModel.history.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val toastMessage by viewModel.toastMessage.collectAsState()
 
     var historyExpanded by remember { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
@@ -88,6 +89,13 @@ fun FilterScreen(
         errorMessage?.let {
             toastMsg = it
             viewModel.consumeError()
+        }
+    }
+    // 层级规则提示（如"山东已包含济南"）
+    LaunchedEffect(toastMessage) {
+        toastMessage?.let {
+            toastMsg = it
+            viewModel.consumeToast()
         }
     }
     LaunchedEffect(toastMsg) {
@@ -276,13 +284,17 @@ fun FilterScreen(
                     }
 
                     when {
-                        // 第一级：省级网格
+                        // 第一级：省级网格（含"全国"；已被"全国"包含的省禁用）
                         currentProvince == null -> {
                             item {
                                 RegionGrid(
                                     items = listOf("全国") + provinces.map { it.name },
-                                    selectedItems = selected.map { it.province }.toSet() +
-                                        (if (selected.isEmpty()) emptySet() else emptySet()),
+                                    selectedItems = selected.map { it.province }.toSet(),
+                                    disabledItems = if (selected.any { it.province == "全国" }) {
+                                        provinces.map { it.name }.toSet()
+                                    } else {
+                                        emptySet()
+                                    },
                                     onClick = { name ->
                                         if (name == "全国") {
                                             viewModel.toggleSelected(LocationRule(province = "全国"))
@@ -295,16 +307,24 @@ fun FilterScreen(
                                 )
                             }
                         }
-                        // 第二级：市级网格（含"全市"）
+                        // 第二级：市级网格（含"全市"；已被"全省"包含的市禁用）
                         currentCityIndex == null -> {
                             currentProvince?.let { province ->
                                 item {
+                                    val provinceSelected = selected.any {
+                                        it.province == province.name && it.city == null && it.district == null
+                                    }
                                     RegionGrid(
                                         items = listOf("全市") + province.cities.map { it.name },
                                         selectedItems = selected
                                             .filter { it.province == province.name }
                                             .map { it.city ?: "全市" }
                                             .toSet(),
+                                        disabledItems = if (provinceSelected) {
+                                            province.cities.map { it.name }.toSet()
+                                        } else {
+                                            emptySet()
+                                        },
                                         onClick = { name ->
                                             if (name == "全市") {
                                                 viewModel.toggleSelected(
@@ -319,18 +339,26 @@ fun FilterScreen(
                                 }
                             }
                         }
-                        // 第三级：区县级网格
+                        // 第三级：区县级网格（已被"全市"包含的区禁用）
                         else -> {
                             currentProvince?.let { province ->
                                 currentCityIndex?.let { idx ->
                                     val city = province.cities.getOrNull(idx) ?: return@let
                                     item {
+                                        val citySelected = selected.any {
+                                            it.province == province.name && it.city == city.name && it.district == null
+                                        }
                                         RegionGrid(
                                             items = city.districts.map { it.name },
                                             selectedItems = selected
                                                 .filter { it.city == city.name }
                                                 .map { it.district ?: "" }
                                                 .toSet(),
+                                            disabledItems = if (citySelected) {
+                                                city.districts.map { it.name }.toSet()
+                                            } else {
+                                                emptySet()
+                                            },
                                             onClick = { name ->
                                                 viewModel.toggleSelected(
                                                     LocationRule(
@@ -467,11 +495,12 @@ private fun BreadcrumbItem(text: String, highlighted: Boolean, onClick: () -> Un
     }
 }
 
-/** 地区网格（省/市/区通用） */
+/** 地区网格（省/市/区通用，支持禁用态） */
 @Composable
 private fun RegionGrid(
     items: List<String>,
     selectedItems: Set<String>,
+    disabledItems: Set<String> = emptySet(),
     onClick: (String) -> Unit
 ) {
     LazyVerticalGrid(
@@ -484,28 +513,39 @@ private fun RegionGrid(
             RegionGridCell(
                 name = name,
                 selected = name in selectedItems,
+                disabled = name in disabledItems,
                 onClick = { onClick(name) }
             )
         }
     }
 }
 
-/** 网格单元格 */
+/** 网格单元格（选中红框红字 / 被上级包含禁用灰字 / 正常黑字） */
 @Composable
-private fun RegionGridCell(name: String, selected: Boolean, onClick: () -> Unit) {
+private fun RegionGridCell(name: String, selected: Boolean, disabled: Boolean, onClick: () -> Unit) {
+    val borderColor = when {
+        selected -> Primary
+        disabled -> Color(0xFFE0E0E0)
+        else -> Color.Gray
+    }
+    val textColor = when {
+        selected -> Primary
+        disabled -> Color(0xFFBDBDBD)
+        else -> Color.Black
+    }
     Box(
         modifier = Modifier
             .padding(4.dp)
-            .border(1.dp, if (selected) Primary else Color.Gray, RoundedCornerShape(8.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
             .background(if (selected) PrimaryContainer else Color.White, RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            .then(if (disabled) Modifier else Modifier.clickable(onClick = onClick))
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             name,
             fontSize = 13.sp,
-            color = if (selected) Primary else Color.Black
+            color = textColor
         )
     }
 }
