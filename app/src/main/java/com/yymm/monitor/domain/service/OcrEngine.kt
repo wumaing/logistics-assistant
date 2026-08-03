@@ -71,6 +71,10 @@ class OcrEngine @Inject constructor(
         val api = tessApi ?: return ""
         return try {
             api.setImage(bitmap)
+            // 页面分割模式 6=块文本（订单列表是块状文本，比默认模式准确）
+            api.pageSegMode = com.googlecode.tesseract.android.TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
+            // 白名单：中文 + 数字 + 常用符号（过滤乱码）
+            api.setVariable("tessedit_char_whitelist", "全国省市自治区县区镇乡村北京天津上海重庆山东江苏浙江安徽福建江西河南湖北湖南广东广西海南四川贵州云南陕西甘肃青海宁夏新疆西藏内蒙古辽宁吉林黑龙江河北山西0123456789.元吨公里到至→-~·：:()（）米平板高栏厢式集装箱拖车自卸冷藏保温高低板面包车棉被爬梯飞翼依维柯整车优车即时拼车电议面议今天明天后天")
             api.utF8Text?.trim() ?: ""
         } catch (_: Exception) {
             ""

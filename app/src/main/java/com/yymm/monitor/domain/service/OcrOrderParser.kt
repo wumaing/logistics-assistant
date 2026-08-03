@@ -19,8 +19,8 @@ class OcrOrderParser @Inject constructor(
 ) {
 
     companion object {
-        /** 地点箭头：出发 → 目的 */
-        val ARROW = Regex("""([一-龥]{2,8})\s*(?:到|至|->|→|—|~)\s*([一-龥]{2,8})""")
+        /** 地点箭头：出发 → 目的（兼容 OCR 常见的 →、一、-、到 等符号） */
+        val ARROW = Regex("""([一-龥]{2,8})\s*(?:到|至|发往|->|→|—|~|一|~)\s*([一-龥]{2,8})""")
         val PRICE = Regex("""(\d{2,6})\s*元""")
         val WEIGHT = Regex("""(\d+(?:\.\d+)?)\s*吨""")
         val DISTANCE = Regex("""(\d+(?:\.\d+)?)\s*(?:km|公里)""")

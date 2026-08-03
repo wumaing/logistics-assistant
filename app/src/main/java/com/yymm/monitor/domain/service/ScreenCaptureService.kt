@@ -37,6 +37,10 @@ class ScreenCaptureService : Service() {
         private const val EXTRA_RESULT_CODE = "extra_result_code"
         private const val EXTRA_RESULT_DATA = "extra_result_data"
 
+        /** 当前截屏服务实例（供 requestCapture 调用） */
+        @Volatile
+        var captureInstance: ScreenCaptureService? = null
+
         /** 当前截屏服务的授权 intent 数据（授权后由 Activity 填充） */
         var pendingProjectionData: Intent? = null
         var pendingResultCode: Int = 0
@@ -75,11 +79,35 @@ class ScreenCaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        captureInstance = this
+        // 通知渠道（前台服务必需）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                "screen_capture_channel",
+                "截屏识别",
+                android.app.NotificationManager.IMPORTANCE_LOW
+            )
+            (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
+                .createNotificationChannel(channel)
+        }
         captureThread = HandlerThread("screen-capture").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Android 14+：MediaProjection 必须前台服务且类型为 mediaProjection，
+        // startForeground 必须在 startForegroundService 后 5 秒内调用（带类型）
+        val notification = android.app.Notification.Builder(this, "screen_capture_channel")
+            .setContentTitle("浏览助手")
+            .setContentText("正在截屏识别订单")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setOngoing(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1001, notification)
+        }
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, pendingResultCode) ?: pendingResultCode
         val data = intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: pendingProjectionData
         if (resultCode != 0 && data != null) {
@@ -113,6 +141,12 @@ class ScreenCaptureService : Service() {
         captureHandler?.post { captureFrame() }
     }
 
+    /** 请求截取一帧（每次轮询调用；返回当前 Bitmap，可能为 null=尚未截到） */
+    fun requestCapture(): Bitmap? {
+        captureHandler?.post { captureFrame() }
+        return lastBitmap
+    }
+
     /** 截取一帧并保存到 lastBitmap */
     private fun captureFrame() {
         val reader = imageReader ?: return
@@ -144,6 +178,7 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        captureInstance = null
         try {
             virtualDisplay?.release()
             imageReader?.close()

@@ -153,6 +153,8 @@ class YymmMonitorService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         // 更新当前前台包名（事件比 root 可靠：司机端 root 拿不到但事件能到）
         event.packageName?.toString()?.let { currentFrontPkg = it }
+        val eventPkg = event.packageName?.toString() ?: ""
+        val isDriver = eventPkg.contains("xiwei")
         // 诊断：事件是否带文本（司机端 root 拿不到时，事件文本是唯一来源）
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
@@ -163,10 +165,11 @@ class YymmMonitorService : AccessibilityService() {
                 diagLog("事件文本(${event.packageName}): ${evTexts.take(5).joinToString(" | ")}")
             }
         }
-        diagLog("onAccessibilityEvent type=${event.eventType} pkg=${event.packageName}")
+        // 降噪：仅记录司机端或窗口切换事件，内容变化刷屏不记（避免淹没关键日志）
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || isDriver) {
+            diagLog("onAccessibilityEvent type=${event.eventType} pkg=${event.packageName}")
+        }
         // 仅处理司机端的事件（其他应用的滚动/内容变化不触发解析，避免误匹配无关内容）
-        val eventPkg = event.packageName?.toString() ?: ""
-        val isDriver = eventPkg.contains("xiwei")
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 // 司机端窗口切换：更新前台包名
@@ -317,19 +320,8 @@ class YymmMonitorService : AccessibilityService() {
      */
     private suspend fun doRefreshCycle() {
         diagLog("doRefreshCycle 开始")
-        // 判断司机端前台：事件包名优先，窗口兜底（司机端无事件时用 AccessibilityWindowInfo）
-        var frontPkg = currentFrontPkg
-        if (frontPkg == null || !frontPkg.contains("xiwei")) {
-            frontPkg = getFrontPkgFromWindows()
-            if (frontPkg != null && frontPkg.contains("xiwei")) {
-                currentFrontPkg = frontPkg
-                diagLog("doRefreshCycle 窗口兜底识别司机端: $frontPkg")
-            }
-        }
-        if (frontPkg == null || !frontPkg.contains("xiwei")) {
-            diagLog("doRefreshCycle 前台非司机端($frontPkg)，跳过本轮")
-            return
-        }
+        // 截屏方案不依赖司机端事件判断：截屏是全局的，OCR 解析不到订单就自然无匹配。
+        // 司机端屏蔽事件/节点，无法用包名判断前台，直接截屏+OCR。
         // 1. 下拉刷新：手势不依赖 root（dispatchGesture 仅需手势能力）
         val refreshOk = performRefresh()
         diagLog("performRefresh 结果=$refreshOk")
@@ -337,8 +329,8 @@ class YymmMonitorService : AccessibilityService() {
         if (!refreshOk) return
         delay(1000)
 
-        // 2. 解析匹配：root 可获取时尽力解析（司机端屏蔽时解析 0 个，不阻塞刷新）
-        parseAndMatch()
+        // 2. 截屏 OCR 解析（主方案：司机端屏蔽节点树）
+        parseFromScreenCapture()
     }
 
     /**
@@ -446,6 +438,9 @@ class YymmMonitorService : AccessibilityService() {
             diagLog("parseFromScreenCapture 截屏服务未运行")
             return
         }
+        // 每次轮询触发截一帧（异步，稍等后取）
+        ScreenCaptureService.captureInstance?.requestCapture()
+        delay(500)
         val bmp = ScreenCaptureService.lastBitmap ?: run {
             diagLog("parseFromScreenCapture 无截屏数据")
             return

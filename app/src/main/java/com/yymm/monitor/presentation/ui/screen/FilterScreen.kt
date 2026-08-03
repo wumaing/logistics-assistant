@@ -21,7 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -591,7 +591,7 @@ private fun RegionGrid(
             .fillMaxWidth()
             .height(androidx.compose.ui.unit.Dp((items.size / 4 + 1) * 56f))
     ) {
-        items(items) { name ->
+        itemsIndexed(items) { index, name ->
             RegionGridCell(
                 name = name,
                 selected = name in selectedItems,
