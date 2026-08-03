@@ -23,15 +23,18 @@ class OcrOrderParser @Inject constructor(
         val ARROW = Regex("""([一-龥]{2,8})\s*(?:到|至|发往|->|→|—|~|一|~)\s*([一-龥]{2,8})""")
         val PRICE = Regex("""(\d{2,6})\s*元""")
         val WEIGHT = Regex("""(\d+(?:\.\d+)?)\s*吨""")
+        val LENGTH = Regex("""(\d+(?:\.\d+)?)\s*米""")
         val DISTANCE = Regex("""(\d+(?:\.\d+)?)\s*(?:km|公里)""")
+        /** 车型（司机端常见） */
+        val VEHICLE_TYPES = listOf("平板", "高栏", "厢式", "集装箱", "拖车", "自卸", "冷藏",
+            "保温", "高低板", "面包车", "棉被", "爬梯", "飞翼", "依维柯", "半挂")
     }
 
     /**
      * 从 OCR 文本解析订单列表。
      *
-     * OCR 文本示例（司机端订单行）：
-     * "山东济南 → 江苏南京  3.5吨  平板  500元  今天装货"
-     * "济宁鱼台 → 日照东阳  10吨  高栏  1200元"
+     * ML Kit OCR 输出是整块文本，订单行可能跨行/字段分散。这里用「订单块」划分：
+     * 按「X→Y」结构定位订单起点，每块内搜索所有字段（重量/车型/车长/运费）。
      *
      * @param ocrText 截屏 OCR 识别出的完整文本
      * @return 解析出的订单列表（可能为空）
@@ -40,24 +43,26 @@ class OcrOrderParser @Inject constructor(
         if (ocrText.isBlank()) return emptyList()
         val orders = mutableListOf<ParsedOrder>()
 
-        // 按行拆，逐行找地点箭头（每条订单一行或跨行）
-        val lines = ocrText.lines().map { it.trim() }.filter { it.isNotBlank() }
-
-        // 先尝试单行匹配（最常见）
-        for (line in lines) {
-            val match = ARROW.find(line) ?: continue
-            val from = match.groupValues[1]
-            val to = match.groupValues[2]
+        // 用正则找所有「X→Y」起点，切成订单块
+        val matches = ARROW.findAll(ocrText).toList()
+        for (i in matches.indices) {
+            val m = matches[i]
+            val from = m.groupValues[1]
+            val to = m.groupValues[2]
             if (from.length < 2 || to.length < 2) continue
+            // 订单块 = 当前箭头起点到下一个箭头起点之间的文本
+            val blockStart = m.range.last
+            val blockEnd = if (i + 1 < matches.size) matches[i + 1].range.first else ocrText.length
+            val block = ocrText.substring(blockStart, blockEnd.coerceAtMost(blockStart + 300))
 
-            // OCR 地名可能乱码，直接保留原文作为省/市（不强行 split，
-            // 匹配时"全国"规则恒匹配，具体地区规则由真人对照屏幕判断）
             val (fromProvince, fromCity) = splitRegion(from)
             val (toProvince, toCity) = splitRegion(to)
 
-            val price = PRICE.find(line)?.groupValues?.get(1)?.toIntOrNull()
-            val weight = WEIGHT.find(line)?.groupValues?.get(1)?.toFloatOrNull()
-            val distance = DISTANCE.find(line)?.groupValues?.get(1)
+            val price = PRICE.find(block)?.groupValues?.get(1)?.toIntOrNull()
+            val weight = WEIGHT.find(block)?.groupValues?.get(1)?.toFloatOrNull()
+            val lengths = LENGTH.findAll(block).map { it.groupValues[1] }.toList()
+            val types = VEHICLE_TYPES.filter { block.contains(it) }
+            val distance = DISTANCE.find(block)?.groupValues?.get(1)
 
             val id = generateOrderId(from, to, price, weight)
             orders.add(
@@ -70,15 +75,15 @@ class OcrOrderParser @Inject constructor(
                     cargoName = null,
                     weightMin = weight,
                     weightMax = weight,
-                    vehicleLengths = emptyList(),
-                    vehicleTypes = emptyList(),
+                    vehicleLengths = lengths,
+                    vehicleTypes = types,
                     priceAmount = price,
-                    priceText = price?.let { "${it}元" } ?: "",
-                    isDianyi = line.contains("电议") || line.contains("面议"),
-                    loadTimeText = line,
+                    priceText = price?.let { "${it}元" } ?: if (block.contains("电议") || block.contains("面议")) "电议" else "",
+                    isDianyi = block.contains("电议") || block.contains("面议"),
+                    loadTimeText = block,
                     distance = distance,
                     tags = emptyList(),
-                    rawTexts = listOf(line)
+                    rawTexts = listOf(block)
                 )
             )
         }

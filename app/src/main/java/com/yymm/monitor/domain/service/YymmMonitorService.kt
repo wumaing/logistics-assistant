@@ -341,8 +341,8 @@ class YymmMonitorService : AccessibilityService() {
     /**
      * 下拉刷新：用户校准的起点坐标（或默认屏高比例），阻塞等待手势结果。
      *
-     * 用户可在悬浮窗「校准刷新点」设置起点（司机端不同机型/页面刷新触发区位置不同，
-     * 固定比例可能滑不到刷新区）。未校准时用默认 20%→65% 屏高。
+     * 借鉴开源 AutoAction：手势加随机扰动（坐标/时长），更接近真人下拉，
+     * 避免被司机端识别为自动化操作而拦截手势（"手势被取消"的深层原因之一）。
      *
      * @return true=手势成功完成；false=被取消/失败/超时（跳过本轮解析）
      */
@@ -356,12 +356,16 @@ class YymmMonitorService : AccessibilityService() {
         val startY = if (settings.refreshStartY in 0..screenHeight) settings.refreshStartY
         else (screenHeight * 0.20f).toInt().coerceAtLeast(0)
         val endY = (screenHeight * 0.65f).toInt().coerceAtMost(screenHeight - 1)
+        // 随机扰动（±10px，±50ms）：接近真人，防检测
+        val randomX = startX + (kotlin.random.Random.nextInt(-10, 10))
+        val randomStartY = startY + (kotlin.random.Random.nextInt(-10, 10))
+        val randomDuration = 350 + (kotlin.random.Random.nextInt(0, 150))
         val path = Path().apply {
-            moveTo(startX.toFloat(), startY.toFloat())
-            lineTo(startX.toFloat(), endY.toFloat())
+            moveTo(randomX.toFloat(), randomStartY.toFloat())
+            lineTo(randomX.toFloat(), endY.toFloat())
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 400))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, randomDuration.toLong()))
             .build()
         val deferred = CompletableDeferred<Boolean>()
         refreshHandler.post {

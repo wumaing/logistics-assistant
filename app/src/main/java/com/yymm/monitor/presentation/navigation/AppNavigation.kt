@@ -11,6 +11,7 @@ import com.yymm.monitor.presentation.ui.screen.AlertSettingsScreen
 import com.yymm.monitor.presentation.ui.screen.FilterScreen
 import com.yymm.monitor.presentation.ui.screen.HistoryScreen
 import com.yymm.monitor.presentation.ui.screen.MainScreen
+import com.yymm.monitor.presentation.ui.screen.RefreshCalibrationScreen
 import com.yymm.monitor.presentation.ui.screen.RuleEditScreen
 
 /**
@@ -51,6 +52,9 @@ fun AppNavigation(
         }
         composable("filter") {
             FilterScreen(navController = navController)
+        }
+        composable("calibration") {
+            RefreshCalibrationScreen(navController = navController)
         }
         composable("guide") {
             // GuideScreen 由 MainActivity 控制（首次启动引导），此路由保留占位

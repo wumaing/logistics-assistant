@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
                         "alert", "settings" -> "alert_settings"
                         "history" -> "history"
                         "filter" -> "filter"
+                        "calibration" -> "calibration"
                         else -> "main"
                     }
                     AppNavigation(
@@ -192,6 +193,7 @@ class MainActivity : ComponentActivity() {
             "alert", "settings" -> NavigationEvent.route.value = "alert_settings"
             "history" -> NavigationEvent.route.value = "history"
             "filter" -> NavigationEvent.route.value = "filter"
+            "calibration" -> NavigationEvent.route.value = "calibration"
             else -> NavigationEvent.route.value = "main"
         }
     }

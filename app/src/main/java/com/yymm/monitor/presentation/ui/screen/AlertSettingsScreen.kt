@@ -93,6 +93,14 @@ fun AlertSettingsScreen(
                 fontSize = 12.sp,
                 color = Color.Gray
             )
+            Spacer(Modifier.height(4.dp))
+            // 校准刷新位置入口
+            TextButton(
+                onClick = { navController.navigate("calibration") },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🎯 校准刷新位置（可视化设置起点→终点）", color = Color(0xFF2196F3))
+            }
             Spacer(Modifier.height(16.dp))
 
             // 匹配方式（真人自定，点击即保存）
