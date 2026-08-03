@@ -8,6 +8,9 @@ package com.yymm.monitor.data.model
 data class UserSettings(
     val refreshIntervalSeconds: Int = 5,
     val matchMode: String = "INCLUDE_CHILDREN",  // INCLUDE_CHILDREN=包含下级匹配, EXACT=同层精确匹配
+    // 自动刷新起点坐标（用户校准；-1=使用默认屏高比例）
+    val refreshStartX: Int = -1,
+    val refreshStartY: Int = -1,
     val myVehicleLength: String? = null,
     val popupEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,

@@ -90,6 +90,13 @@ fun FloatingWindowContent(
                     }
                 )
                 DropdownMenuItem(
+                    text = { Text("🎯 设为刷新起点") },
+                    onClick = {
+                        menuExpanded = false
+                        FloatingWindowHideHandler.setRefreshPoint()
+                    }
+                )
+                DropdownMenuItem(
                     text = { Text("隐藏悬浮窗") },
                     onClick = {
                         menuExpanded = false
@@ -237,8 +244,10 @@ fun FloatingWindowContent(
 object FloatingWindowHideHandler {
     var hideCallback: (() -> Unit)? = null
     var dumpNodeTreeCallback: (() -> Unit)? = null
+    var setRefreshPointCallback: (() -> Unit)? = null
     fun hide() = hideCallback?.invoke()
     fun dumpNodeTree() = dumpNodeTreeCallback?.invoke()
+    fun setRefreshPoint() = setRefreshPointCallback?.invoke()
 }
 
 /** 状态颜色（PRD D.2）：绿=监控中, 红=暂停/错误, 黄=检测中, 蓝=就绪, 灰=等待启动 */

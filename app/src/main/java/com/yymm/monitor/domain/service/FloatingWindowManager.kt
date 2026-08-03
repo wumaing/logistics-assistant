@@ -133,6 +133,37 @@ object FloatingWindowManager {
         }, 500)
         // 长按迷你球"隐藏悬浮窗"菜单回调
         FloatingWindowHideHandler.hideCallback = { hide() }
+        // "设为刷新起点"回调：把悬浮球当前位置保存为下拉刷新起点
+        FloatingWindowHideHandler.setRefreshPointCallback = {
+            val lp = layoutParams
+            if (lp != null) {
+                // 悬浮球中心 = 位置 + 半宽（迷你球 56dp≈112px，中心 +56,+56）
+                val centerX = lp.x + 56
+                val centerY = lp.y + 56
+                // 用 SharedPreferences 保存（悬浮窗是 object，无法注入 Hilt）
+                val prefs = context.getSharedPreferences("yymm_settings", android.content.Context.MODE_PRIVATE)
+                try {
+                    val gson = com.google.gson.Gson()
+                    val json = prefs.getString("user_settings", null)
+                    val current = if (json != null) {
+                        gson.fromJson(json, com.yymm.monitor.data.model.UserSettings::class.java)
+                    } else {
+                        com.yymm.monitor.data.model.UserSettings()
+                    }
+                    val updated = current.copy(refreshStartX = centerX, refreshStartY = centerY)
+                    prefs.edit().putString("user_settings", gson.toJson(updated)).apply()
+                    android.widget.Toast.makeText(context, "刷新起点已设为 (${centerX},${centerY})", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    try {
+                        android.widget.Toast.makeText(context, "保存失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
+                }
+            } else {
+                try {
+                    android.widget.Toast.makeText(context, "请先拖动悬浮球到刷新起点位置", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {}
+            }
+        }
         // "导出节点树"调试回调
         FloatingWindowHideHandler.dumpNodeTreeCallback = {
             val path = YymmMonitorService.instance?.dumpNodeTree()

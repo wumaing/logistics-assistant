@@ -51,6 +51,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     private fun update(transform: (UserSettings) -> UserSettings) {
-        _settings.value = transform(_settings.value)
+        val updated = transform(_settings.value)
+        _settings.value = updated
+        // 每次修改立即保存（修复"设置不生效"：不再依赖"保存设置"按钮）
+        settingsRepository.saveSettings(updated)
     }
 }

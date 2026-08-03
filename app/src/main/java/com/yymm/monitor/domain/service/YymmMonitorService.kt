@@ -339,7 +339,10 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     /**
-     * 下拉刷新：屏幕比例坐标（避免小屏滑出/大屏拉不动），阻塞等待手势结果。
+     * 下拉刷新：用户校准的起点坐标（或默认屏高比例），阻塞等待手势结果。
+     *
+     * 用户可在悬浮窗「校准刷新点」设置起点（司机端不同机型/页面刷新触发区位置不同，
+     * 固定比例可能滑不到刷新区）。未校准时用默认 20%→65% 屏高。
      *
      * @return true=手势成功完成；false=被取消/失败/超时（跳过本轮解析）
      */
@@ -347,13 +350,15 @@ class YymmMonitorService : AccessibilityService() {
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
-        // 从屏高 20% 滑到 65%（约 45% 屏高的下拉幅度，接近真人下拉；过长的路径
-        // 在部分机型会被系统判定无效导致 onCancelled）
-        val startY = (screenHeight * 0.20f).toInt().coerceAtLeast(0)
+        // 用户校准的起点坐标（优先）；未校准用默认屏高 20%→65%
+        val settings = settingsRepo.getSettings()
+        val startX = if (settings.refreshStartX in 0..screenWidth) settings.refreshStartX else screenWidth / 2
+        val startY = if (settings.refreshStartY in 0..screenHeight) settings.refreshStartY
+        else (screenHeight * 0.20f).toInt().coerceAtLeast(0)
         val endY = (screenHeight * 0.65f).toInt().coerceAtMost(screenHeight - 1)
         val path = Path().apply {
-            moveTo(screenWidth / 2f, startY.toFloat())
-            lineTo(screenWidth / 2f, endY.toFloat())
+            moveTo(startX.toFloat(), startY.toFloat())
+            lineTo(startX.toFloat(), endY.toFloat())
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 400))
