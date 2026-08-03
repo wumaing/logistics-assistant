@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import com.yymm.monitor.domain.service.FloatingWindowManager
+import com.yymm.monitor.domain.service.ScreenCaptureService
 import com.yymm.monitor.presentation.navigation.AppNavigation
 import com.yymm.monitor.presentation.ui.screen.GuideScreen
 import com.yymm.monitor.presentation.ui.theme.YymmMonitorTheme
@@ -49,6 +50,11 @@ object PermissionMaskState {
 
 /** 服务未真正连接提示（OPPO 重装后无障碍显示启用但未绑定） */
 object ReconnectServiceState {
+    val shouldShow = MutableStateFlow(false)
+}
+
+/** 截屏授权引导（MediaProjection 首次授权） */
+object ScreenCapturePermissionState {
     val shouldShow = MutableStateFlow(false)
 }
 
@@ -73,6 +79,39 @@ class MainActivity : ComponentActivity() {
     }
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    companion object {
+        private const val REQUEST_SCREEN_CAPTURE = 1001
+    }
+
+    /** 请求截屏授权（首次需用户允许，之后自动截屏） */
+    fun requestScreenCapturePermission() {
+        try {
+            val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as
+                android.media.projection.MediaProjectionManager
+            startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_SCREEN_CAPTURE)
+        } catch (_: Exception) {
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_SCREEN_CAPTURE && resultCode == RESULT_OK && data != null) {
+            // 保存授权结果，启动截屏服务
+            com.yymm.monitor.domain.service.ScreenCaptureService.pendingResultCode = resultCode
+            com.yymm.monitor.domain.service.ScreenCaptureService.pendingProjectionData = data
+            try {
+                val intent = Intent(this, com.yymm.monitor.domain.service.ScreenCaptureService::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +172,14 @@ class MainActivity : ComponentActivity() {
                         ReconnectServiceState.shouldShow.value = false
                     })
                 }
+
+                // 截屏授权引导（首次弹 MediaProjection 授权）
+                val showScreenCapture by ScreenCapturePermissionState.shouldShow.collectAsStateWithLifecycle()
+                if (showScreenCapture) {
+                    ScreenCaptureMask(onDismiss = {
+                        ScreenCapturePermissionState.shouldShow.value = false
+                    })
+                }
             }
         }
     }
@@ -172,6 +219,9 @@ class MainActivity : ComponentActivity() {
                     // OPPO 重装后：settings 显示已启用但服务未真正连接（Bound services 空）
                     // 提示用户重新开关一次无障碍，监控才能工作
                     ReconnectServiceState.shouldShow.value = true
+                } else if (!ScreenCaptureService.isRunning) {
+                    // 截屏服务未运行：引导用户授权（首次）或确认已授权
+                    ScreenCapturePermissionState.shouldShow.value = true
                 }
             }, 800)
         }
@@ -303,6 +353,75 @@ private fun ReconnectMask(onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("知道了")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 截屏授权引导：司机端屏蔽无障碍，需截屏+OCR 读取订单文本。
+ * 首次点击授权弹系统 MediaProjection 授权框。
+ */
+@Composable
+private fun ScreenCaptureMask(onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? androidx.activity.ComponentActivity
+
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(300)
+        visible = true
+    }
+
+    if (!visible) return
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "需要截屏权限",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFF44336)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "司机端屏蔽了无障碍读取，浏览助手需要通过截屏 + 本地OCR识别订单文本（纯本地、不上传、不自动点击）。",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = {
+                        ScreenCapturePermissionState.shouldShow.value = false
+                        (activity as? MainActivity)?.requestScreenCapturePermission()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
+                ) {
+                    Text("去授权")
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("稍后再说")
                 }
             }
         }

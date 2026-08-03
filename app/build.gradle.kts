@@ -119,6 +119,9 @@ dependencies {
     // Gson
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // 本地 OCR（tesseract）：读取司机端截屏订单文本，纯本地识别不上传
+    implementation("com.rmtheis:tess-two:9.1.0")
+
     // 单元测试
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")

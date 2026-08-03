@@ -10,6 +10,8 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.yymm.monitor.data.local.entity.MatchRuleEntity
+import com.yymm.monitor.data.model.ParsedOrder
 import com.yymm.monitor.data.repository.SettingsRepository
 import com.yymm.monitor.domain.model.MonitorState
 import com.yymm.monitor.domain.model.MonitorStats
@@ -56,6 +58,8 @@ class YymmMonitorService : AccessibilityService() {
     @Inject lateinit var ruleEngine: RuleEngine
     @Inject lateinit var alertManager: AlertManager
     @Inject lateinit var settingsRepo: SettingsRepository
+    @Inject lateinit var ocrEngine: OcrEngine
+    @Inject lateinit var ocrOrderParser: OcrOrderParser
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshHandler = Handler(Looper.getMainLooper())
@@ -68,11 +72,37 @@ class YymmMonitorService : AccessibilityService() {
     /** 事件驱动解析节流时间戳 */
     private var lastEventParseTs = 0L
 
+    /** 当前前台包名（从事件更新；司机端 root 拿不到时，事件是可靠来源） */
+    @Volatile
+    private var currentFrontPkg: String? = null
+
     private val _monitorState = MutableStateFlow<MonitorState>(MonitorState.IDLE)
     val monitorState: StateFlow<MonitorState> = _monitorState.asStateFlow()
 
     private val _stats = MutableStateFlow(MonitorStats())
     val stats: StateFlow<MonitorStats> = _stats.asStateFlow()
+
+    /**
+     * 获取当前前台窗口包名（不依赖 root/事件）。
+     *
+     * 司机端屏蔽 root 和事件时，用 AccessibilityWindowInfo 查活动窗口。
+     * root 在司机端可能为 null，改用窗口 title（如 "com.xiwei.logistics/...CarrierMainActivity"）解析包名。
+     */
+    private fun getFrontPkgFromWindows(): String? {
+        return try {
+            val win = windows?.firstOrNull { it.isActive }
+                ?: windows?.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+            if (win == null) return null
+            // 优先 root 包名；root 为 null 时从窗口 title 解析
+            win.root?.packageName?.toString()?.takeIf { it.isNotBlank() }
+                ?: win.title?.toString()?.substringBefore("/")?.substringAfter(".")?.let { full ->
+                    full.substringBefore("/")
+                }
+                ?: win.title?.toString()?.substringBefore("/")
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     /** 写诊断日志到 files/monitor_log.txt（ColorOS 过滤 logcat，用文件绕开） */
     private fun diagLog(msg: String) {
@@ -103,10 +133,12 @@ class YymmMonitorService : AccessibilityService() {
         diagLog("onServiceConnected 无障碍服务已连接")
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_SCROLLED
+                AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
             // 手势能力由 accessibility_service_config.xml 的 canPerformGestures="true" 声明
             // （系统绑定服务时解析 XML 授予 CAPABILITY_CAN_PERFORM_GESTURES）
         }
@@ -119,6 +151,8 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        // 更新当前前台包名（事件比 root 可靠：司机端 root 拿不到但事件能到）
+        event.packageName?.toString()?.let { currentFrontPkg = it }
         // 诊断：事件是否带文本（司机端 root 拿不到时，事件文本是唯一来源）
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
@@ -130,14 +164,19 @@ class YymmMonitorService : AccessibilityService() {
             }
         }
         diagLog("onAccessibilityEvent type=${event.eventType} pkg=${event.packageName}")
+        // 仅处理司机端的事件（其他应用的滚动/内容变化不触发解析，避免误匹配无关内容）
+        val eventPkg = event.packageName?.toString() ?: ""
+        val isDriver = eventPkg.contains("xiwei")
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // 不自动暂停：由真人判断页面是否正确。窗口切换不中断监控，
-                // 轮询继续尝试刷新解析（在司机页时正常，切出时手势可能失败自动跳过）
+                // 司机端窗口切换：更新前台包名
+                if (isDriver) currentFrontPkg = eventPkg
             }
-            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                // 事件驱动解析：用户在运满满内滚动列表时立即抓取，与定时轮询互补（节流 800ms 防刷屏）
-                if (_monitorState.value == MonitorState.RUNNING) {
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                // 事件驱动解析：仅司机端的滚动/内容变化触发（节流 800ms 防刷屏）
+                if (_monitorState.value == MonitorState.RUNNING && isDriver) {
+                    currentFrontPkg = eventPkg
                     val now = SystemClock.uptimeMillis()
                     if (now - lastEventParseTs > 800) {
                         lastEventParseTs = now
@@ -278,22 +317,27 @@ class YymmMonitorService : AccessibilityService() {
      */
     private suspend fun doRefreshCycle() {
         diagLog("doRefreshCycle 开始")
-        // 仅当司机端在前台时刷新（root 可访问）；非司机端跳过本轮但不暂停
-        val preRoot = captureRootOnMainThread()
-        val frontPkg = preRoot?.packageName?.toString()
-        preRoot?.recycle()
+        // 判断司机端前台：事件包名优先，窗口兜底（司机端无事件时用 AccessibilityWindowInfo）
+        var frontPkg = currentFrontPkg
+        if (frontPkg == null || !frontPkg.contains("xiwei")) {
+            frontPkg = getFrontPkgFromWindows()
+            if (frontPkg != null && frontPkg.contains("xiwei")) {
+                currentFrontPkg = frontPkg
+                diagLog("doRefreshCycle 窗口兜底识别司机端: $frontPkg")
+            }
+        }
         if (frontPkg == null || !frontPkg.contains("xiwei")) {
             diagLog("doRefreshCycle 前台非司机端($frontPkg)，跳过本轮")
             return
         }
-        // 1. 下拉刷新
+        // 1. 下拉刷新：手势不依赖 root（dispatchGesture 仅需手势能力）
         val refreshOk = performRefresh()
         diagLog("performRefresh 结果=$refreshOk")
         _stats.value = _stats.value.copy(refreshCount = _stats.value.refreshCount + 1)
         if (!refreshOk) return
         delay(1000)
 
-        // 2. 解析匹配
+        // 2. 解析匹配：root 可获取时尽力解析（司机端屏蔽时解析 0 个，不阻塞刷新）
         parseAndMatch()
     }
 
@@ -359,7 +403,7 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     private suspend fun parseAndMatch() {
-        // root 获取失败时重试（getRootInActiveWindow 在刷新/窗口切换后可能短暂不可用）
+        // 1. 优先无障碍节点树（root 可获取且是司机端时）
         var node: AccessibilityNodeInfo? = null
         repeat(3) { attempt ->
             node = captureRootOnMainThread()
@@ -368,33 +412,67 @@ class YymmMonitorService : AccessibilityService() {
             delay(500)
         }
         val rootNode = node
-        if (rootNode == null) {
-            diagLog("parseAndMatch root=null 无法取节点（重试3次后放弃）")
-            return
+        if (rootNode != null) {
+            val rootPkg = rootNode.packageName?.toString() ?: ""
+            if (rootPkg.contains("xiwei")) {
+                parseFromRoot(rootNode)
+                return
+            }
+            diagLog("parseAndMatch 非司机端 root($rootPkg)，改走截屏 OCR")
+            rootNode.recycle()
         }
+
+        // 2. 截屏 OCR 兜底（司机端屏蔽节点树时的主方案）
+        parseFromScreenCapture()
+    }
+
+    /** 从无障碍节点树解析（司机端暴露节点时） */
+    private suspend fun parseFromRoot(rootNode: AccessibilityNodeInfo) {
         try {
-            // 诊断：root 节点的基本信息（确认司机端节点树是否为空）
             val texts = collectAllTexts(rootNode)
-            diagLog("parseAndMatch root: pkg=${rootNode.packageName} cls=${rootNode.className} child=${rootNode.childCount} 文本数=${texts.size}")
-            if (texts.isNotEmpty()) {
-                diagLog("parseAndMatch 文本前5条: ${texts.take(5).joinToString(" | ")}")
-            }
+            diagLog("parseFromRoot root: pkg=${rootNode.packageName} 文本数=${texts.size}")
             val orders = orderParser.parse(rootNode)
-            diagLog("parseAndMatch 解析到 ${orders.size} 个订单")
-            orders.forEach { order ->
-                if (ruleEngine.match(order) && !alertManager.isAlertedToday(order.id)) {
-                    diagLog("匹配成功并提醒: ${order.fromProvince}${order.fromCity} → ${order.toProvince}${order.toCity}")
-                    alertManager.triggerAlert(order)
-                    _stats.value = _stats.value.copy(
-                        matchCount = _stats.value.matchCount + 1
-                    )
-                }
-            }
-            // 悬浮窗统计联动
-            val s = _stats.value
-            FloatingWindowManager.updateStats(s.refreshCount, s.matchCount, s.confirmCount)
+            diagLog("parseFromRoot 解析到 ${orders.size} 个订单")
+            matchAndAlert(orders)
         } finally {
             rootNode.recycle()
         }
+    }
+
+    /** 从截屏 OCR 解析（司机端屏蔽节点树时的主方案） */
+    private suspend fun parseFromScreenCapture() {
+        // 截屏服务未运行则尝试启动（需已授权）
+        if (!ScreenCaptureService.isRunning) {
+            diagLog("parseFromScreenCapture 截屏服务未运行")
+            return
+        }
+        val bmp = ScreenCaptureService.lastBitmap ?: run {
+            diagLog("parseFromScreenCapture 无截屏数据")
+            return
+        }
+        val ocrText = ocrEngine.recognize(bmp)
+        if (ocrText.isBlank()) {
+            diagLog("parseFromScreenCapture OCR 无文本")
+            return
+        }
+        diagLog("parseFromScreenCapture OCR 文本(${ocrText.length}字符): ${ocrText.take(80)}")
+        val orders = ocrOrderParser.parse(ocrText)
+        diagLog("parseFromScreenCapture 解析到 ${orders.size} 个订单")
+        matchAndAlert(orders)
+    }
+
+    /** 匹配 + 提醒（共享，suspend：内部调用 suspend 的 match/triggerAlert） */
+    private suspend fun matchAndAlert(orders: List<ParsedOrder>) {
+        orders.forEach { order ->
+            if (ruleEngine.match(order) && !alertManager.isAlertedToday(order.id)) {
+                diagLog("匹配成功并提醒: ${order.fromProvince}${order.fromCity} → ${order.toProvince}${order.toCity}")
+                alertManager.triggerAlert(order)
+                _stats.value = _stats.value.copy(
+                    matchCount = _stats.value.matchCount + 1
+                )
+            }
+        }
+        val s = _stats.value
+        FloatingWindowManager.updateStats(s.refreshCount, s.matchCount, s.confirmCount)
     }
 }

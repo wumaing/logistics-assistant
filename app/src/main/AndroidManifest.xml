@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 截屏识别：读取司机端订单文本（MediaProjection 运行时授权，纯本地 OCR） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:name=".YymmMonitorApplication"
@@ -57,6 +59,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="@string/foreground_service_type_special_use_subtype" />
         </service>
+
+        <!-- 截屏服务（MediaProjection）：司机端屏蔽无障碍，截屏+OCR 读取订单文本 -->
+        <service
+            android:name=".domain.service.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <receiver
             android:name=".domain.service.BootReceiver"
