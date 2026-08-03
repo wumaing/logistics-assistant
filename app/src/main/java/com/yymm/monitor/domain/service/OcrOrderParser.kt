@@ -50,6 +50,8 @@ class OcrOrderParser @Inject constructor(
             val to = match.groupValues[2]
             if (from.length < 2 || to.length < 2) continue
 
+            // OCR 地名可能乱码，直接保留原文作为省/市（不强行 split，
+            // 匹配时"全国"规则恒匹配，具体地区规则由真人对照屏幕判断）
             val (fromProvince, fromCity) = splitRegion(from)
             val (toProvince, toCity) = splitRegion(to)
 

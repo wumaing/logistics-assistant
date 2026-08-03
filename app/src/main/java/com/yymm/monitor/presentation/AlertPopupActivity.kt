@@ -150,21 +150,31 @@ class AlertPopupActivity : ComponentActivity() {
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 // 出发地 → 目的地（大字）
-                                Row(
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
+                                // OCR 来源订单优先展示原始文本（比解析的地名准确，真人可对照屏幕）
+                                val ocrRaw = order.rawTexts.firstOrNull()
+                                if (ocrRaw != null && (order.fromProvince.length <= 2 || order.toProvince.length <= 2)) {
                                     Text(
-                                        "${order.fromProvince} ${order.fromCity ?: ""}",
-                                        fontSize = 22.sp,
+                                        ocrRaw,
+                                        fontSize = 18.sp,
                                         fontWeight = FontWeight.Bold
                                     )
-                                    Text("↓", fontSize = 20.sp)
-                                    Text(
-                                        "${order.toProvince} ${order.toCity ?: ""}",
-                                        fontSize = 22.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                } else {
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            "${order.fromProvince} ${order.fromCity ?: ""}",
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text("↓", fontSize = 20.sp)
+                                        Text(
+                                            "${order.toProvince} ${order.toCity ?: ""}",
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                                 Spacer(Modifier.height(12.dp))
 

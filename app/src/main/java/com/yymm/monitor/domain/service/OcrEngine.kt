@@ -70,15 +70,48 @@ class OcrEngine @Inject constructor(
         if (!init()) return ""
         val api = tessApi ?: return ""
         return try {
-            api.setImage(bitmap)
+            // 图像预处理：放大 2x + 灰度 + 对比度增强（大幅提高小字号识别率）
+            val processed = preprocess(bitmap)
+            api.setImage(processed)
             // 页面分割模式 6=块文本（订单列表是块状文本，比默认模式准确）
             api.pageSegMode = com.googlecode.tesseract.android.TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
             // 白名单：中文 + 数字 + 常用符号（过滤乱码）
             api.setVariable("tessedit_char_whitelist", "全国省市自治区县区镇乡村北京天津上海重庆山东江苏浙江安徽福建江西河南湖北湖南广东广西海南四川贵州云南陕西甘肃青海宁夏新疆西藏内蒙古辽宁吉林黑龙江河北山西0123456789.元吨公里到至→-~·：:()（）米平板高栏厢式集装箱拖车自卸冷藏保温高低板面包车棉被爬梯飞翼依维柯整车优车即时拼车电议面议今天明天后天")
-            api.utF8Text?.trim() ?: ""
+            val text = api.utF8Text?.trim() ?: ""
+            processed.recycle()
+            text
         } catch (_: Exception) {
             ""
         }
+    }
+
+    /** 图像预处理：放大 2x + 灰度 + 对比度增强 */
+    private fun preprocess(src: Bitmap): Bitmap {
+        // 1. 放大 2x（小字号文字变大，OCR 识别率显著提升）
+        val scaled = Bitmap.createScaledBitmap(
+            src, src.width * 2, src.height * 2, true
+        )
+        // 2. 灰度 + 对比度增强（突出文字，去背景噪声）
+        val w = scaled.width
+        val h = scaled.height
+        val pixels = IntArray(w * h)
+        scaled.getPixels(pixels, 0, w, 0, 0, w, h)
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            val r = (p shr 16) and 0xFF
+            val g = (p shr 8) and 0xFF
+            val b = p and 0xFF
+            // 灰度
+            var gray = (r * 0.299f + g * 0.587f + b * 0.114f).toInt()
+            // 对比度增强：darken dark, lighten light
+            gray = if (gray < 128) (gray * 0.8f).toInt() else (128 + (gray - 128) * 1.2f).toInt()
+            gray = gray.coerceIn(0, 255)
+            pixels[i] = (0xFF shl 24) or (gray shl 16) or (gray shl 8) or gray
+        }
+        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        result.setPixels(pixels, 0, w, 0, 0, w, h)
+        scaled.recycle()
+        return result
     }
 
     /** 释放 OCR 资源 */

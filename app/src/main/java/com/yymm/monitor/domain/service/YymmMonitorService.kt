@@ -95,10 +95,11 @@ class YymmMonitorService : AccessibilityService() {
             if (win == null) return null
             // 优先 root 包名；root 为 null 时从窗口 title 解析
             win.root?.packageName?.toString()?.takeIf { it.isNotBlank() }
-                ?: win.title?.toString()?.substringBefore("/")?.substringAfter(".")?.let { full ->
-                    full.substringBefore("/")
+                ?: win.title?.toString()?.let { title ->
+                    // title 形如 "com.xiwei.logistics/com.xiwei.logistics.carrier.ui.CarrierMainActivity"
+                    val slashIdx = title.indexOf('/')
+                    if (slashIdx > 0) title.substring(0, slashIdx) else title
                 }
-                ?: win.title?.toString()?.substringBefore("/")
         } catch (_: Exception) {
             null
         }
@@ -320,12 +321,16 @@ class YymmMonitorService : AccessibilityService() {
      */
     private suspend fun doRefreshCycle() {
         diagLog("doRefreshCycle 开始")
-        // 截屏方案不依赖司机端事件判断：截屏是全局的，OCR 解析不到订单就自然无匹配。
-        // 司机端屏蔽事件/节点，无法用包名判断前台，直接截屏+OCR。
+        // 司机端屏蔽事件/root/窗口信息，无法可靠判断前台。
+        // 策略：全局下拉刷新 + 截屏 OCR，OCR 识别出订单结构（X→Y）才解析匹配，
+        // 非订单页（桌面等）OCR 识别不出订单结构自然跳过，不会误匹配。
         // 1. 下拉刷新：手势不依赖 root（dispatchGesture 仅需手势能力）
         val refreshOk = performRefresh()
         diagLog("performRefresh 结果=$refreshOk")
         _stats.value = _stats.value.copy(refreshCount = _stats.value.refreshCount + 1)
+        // 刷新计数实时反馈到悬浮窗（用户能看到"刷新: N次"在增长）
+        val s = _stats.value
+        FloatingWindowManager.updateStats(s.refreshCount, s.matchCount, s.confirmCount)
         if (!refreshOk) return
         delay(1000)
 

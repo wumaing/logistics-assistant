@@ -47,8 +47,11 @@ class RuleEngine @Inject constructor(
 
         // ========== 第一优先级：出发地与目的地 ==========
         // 1. 出发地匹配（OR）
+        // 规则地区匹配：正常按 LocationRule.matches；OCR 乱码（不在地区词典）时
+        // 地名不可靠 → 宽松放行（由真人对照屏幕判断），避免误杀
         val fromMatch = fromLocations.isEmpty() ||
             fromLocations.any { it.matches(order.fromProvince, order.fromCity, includeChildren = includeChildren) } ||
+            !isKnownRegion(order.fromProvince) || // OCR 乱码（不在词典）→ 放行
             parseStringList(rule.fromCustomPointsJson).any { point ->
                 order.rawTexts.any { it.contains(point) }
             }
@@ -57,6 +60,7 @@ class RuleEngine @Inject constructor(
         // 2. 目的地匹配（OR）
         val toMatch = toLocations.isEmpty() ||
             toLocations.any { it.matches(order.toProvince, order.toCity, includeChildren = includeChildren) } ||
+            !isKnownRegion(order.toProvince) ||
             parseStringList(rule.toCustomPointsJson).any { point ->
                 order.rawTexts.any { it.contains(point) }
             }
@@ -174,6 +178,25 @@ class RuleEngine @Inject constructor(
     private fun parseLocations(json: String): List<LocationRule> {
         return try { Gson().fromJson(json, Array<LocationRule>::class.java).toList() }
         catch (e: Exception) { emptyList() }
+    }
+
+    /** 省名是否在地区词典中（OCR 乱码不在词典 → 视为不可靠，宽松放行） */
+    private fun isKnownRegion(name: String): Boolean {
+        if (name.isBlank()) return false
+        val normalized = com.yymm.monitor.data.model.LocationRule.normalizeProvince(name)
+        return KNOW_PROVINCES.contains(normalized)
+    }
+
+    companion object {
+        /** 全国省级行政区（规范化后） */
+        private val KNOW_PROVINCES = setOf(
+            "北京", "天津", "上海", "重庆",
+            "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽",
+            "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南",
+            "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾",
+            "内蒙古", "广西", "西藏", "宁夏", "新疆",
+            "香港", "澳门"
+        )
     }
 
     private fun parseStringList(json: String): List<String> {
