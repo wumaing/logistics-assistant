@@ -122,6 +122,9 @@ dependencies {
     // 本地 OCR（tesseract）：读取司机端截屏订单文本，纯本地识别不上传
     implementation("com.rmtheis:tess-two:9.1.0")
 
+    // ML Kit 中文识别（Google 官方，on-device 离线，识别率远高于 tesseract）
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
+
     // 单元测试
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
