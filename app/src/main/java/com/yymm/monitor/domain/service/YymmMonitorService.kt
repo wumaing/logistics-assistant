@@ -159,17 +159,17 @@ class YymmMonitorService : AccessibilityService() {
             // 手势能力由 accessibility_service_config.xml 的 canPerformGestures="true" 声明
             // （系统绑定服务时解析 XML 授予 CAPABILITY_CAN_PERFORM_GESTURES）
         }
-        // 服务重连恢复：若上次是 RUNNING（服务被杀/系统回收后重连），
-        // 自动恢复 RUNNING 并重启轮询，避免"计数停了"（监控静默退出）。
-        // 持久化状态存于 SharedPreferences，服务进程被杀后重建也能读到。
+        // 启动原则（真人手动优先，后台被杀自动恢复）：
+        // - 首次连接：只进入 READY（悬浮窗显示"开始监控"），必须真人手动点开始才 RUNNING
+        // - 运行中服务被杀重连：检测到 monitor_running 标志（真人启动时写入）→ 自动恢复 RUNNING
+        // - 真人暂停后重连：标志已清除 → 回到 READY 等真人重新启动
         val wasRunning = prefsMonitor.getBoolean("monitor_running", false)
         if (_monitorState.value == MonitorState.IDLE && wasRunning) {
-            diagLog("onServiceConnected 检测到上次在监控中，自动恢复 RUNNING")
+            diagLog("onServiceConnected 服务被杀后重连，自动恢复 RUNNING")
             _monitorState.value = MonitorState.RUNNING
             FloatingWindowManager.updateState(MonitorState.RUNNING)
             startRefreshLoop()
         } else if (_monitorState.value == MonitorState.IDLE) {
-            // 启动即就绪：无障碍服务连接后自动进入 READY（悬浮窗显示"开始监控"）
             _monitorState.value = MonitorState.READY
             FloatingWindowManager.updateState(MonitorState.READY)
         }
@@ -287,7 +287,8 @@ class YymmMonitorService : AccessibilityService() {
      */
     override fun onDestroy() {
         super.onDestroy()
-        // 服务被杀但用户仍希望监控（RUNNING/PAUSED 非 IDLE）→ 重启
+        // 服务被系统杀死后自动重启（拉回进程），配合 onServiceConnected 的
+        // monitor_running 标志自动恢复 RUNNING——保证"真人启动后被杀不丢监控"。
         val shouldRestart = _monitorState.value == MonitorState.RUNNING ||
             _monitorState.value == MonitorState.PAUSED
         instance = null
@@ -307,6 +308,7 @@ class YymmMonitorService : AccessibilityService() {
         // 不校验当前页面：真人主动打开运满满司机页后点"开始监控"，
         // 助手直接进入 RUNNING 开始轮询刷新+解析+匹配，由真人判断页面是否正确。
         _monitorState.value = MonitorState.RUNNING
+        // 持久化运行标志：真人手动启动后，服务被杀重连时自动恢复 RUNNING（不丢监控）
         prefsMonitor.edit().putBoolean("monitor_running", true).apply()
         FloatingWindowManager.updateState(MonitorState.RUNNING)
         serviceScope.launch { syncActiveRulesToFloat() }
@@ -317,7 +319,8 @@ class YymmMonitorService : AccessibilityService() {
     fun pauseMonitoring(reason: String = "用户手动暂停") {
         if (_monitorState.value == MonitorState.PAUSED) return
         _monitorState.value = MonitorState.PAUSED
-        prefsMonitor.edit().putBoolean("monitor_running", false).apply()
+        // 用户手动暂停：清除运行标志（重连后不自动恢复，等真人重新启动）
+        prefsMonitor.edit().remove("monitor_running").apply()
         stopRefreshLoop()
         FloatingWindowManager.updateState(MonitorState.PAUSED, reason)
     }
@@ -464,13 +467,11 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     /**
-     * 派发"按住→下拉→松手"三段手势（监控刷新与校准页试刷共用）。
+     * 派发下拉手势（监控刷新与校准页试刷共用）。
      *
-     * 运满满 flutter 页面：快速滑动被当作滚动列表，慢速"按住→下拉→松手"才识别为下拉刷新。
-     * 真人下拉分三段：
-     *  1. 按住起点（短暂停留 150ms，进入下拉模式）
-     *  2. 缓慢下拉到终点（指定时长，触发下拉刷新动画）
-     *  3. 松手（触发刷新）
+     * 用单 stroke 缓慢下拉（单一触摸点从起点滑到终点）：
+     * - 慢速（用户设定时长，默认 400ms）让运满满 flutter 识别为下拉刷新
+     * - 单一触摸点让校准页 Compose 的 detectDragGestures 能响应（多 stroke 会导致校准页无响应）
      *
      * 手势加随机扰动（±10px，±15ms），更接近真人，避免被司机端识别为自动化操作而拦截手势。
      *
@@ -484,27 +485,16 @@ class YymmMonitorService : AccessibilityService() {
         val randomStartY = startY + (kotlin.random.Random.nextInt(-10, 10))
         val randomEndX = endX + (kotlin.random.Random.nextInt(-10, 10))
         val randomEndY = endY + (kotlin.random.Random.nextInt(-10, 10))
+        // 慢速下拉（用户设定时长，默认 400ms）
+        val pullMs: Long = durationMs.coerceIn(200, 2000).toLong() + (kotlin.random.Random.nextInt(-20, 20))
 
-        // 真人下拉：按压→缓慢下拉→松手
-        //  段1：按压（手指在起点停留 150ms，进入下拉模式）—— willContinue=true 保持按住
-        //  段2：缓慢下拉到终点（用户设定时长，默认 400ms）—— 触发刷新动画
-        val holdMs = 150L
-        val baseDuration = durationMs.coerceIn(200, 2000)
-        val pullMs: Long = baseDuration.toLong() + (kotlin.random.Random.nextInt(-20, 20))
-
-        // 按压段：路径几乎不动（起点微移 1px，保持手指按下）
-        val pressPath = Path().apply {
-            moveTo(randomX.toFloat(), randomStartY.toFloat())
-            lineTo(randomX.toFloat(), randomStartY.toFloat() + 1f)
-        }
-        // 下拉段：从起点缓慢滑到终点
-        val dragPath = Path().apply {
+        // 单 stroke：从起点缓慢滑到终点（单一触摸点，校准页可响应拖动）
+        val path = Path().apply {
             moveTo(randomX.toFloat(), randomStartY.toFloat())
             lineTo(randomEndX.toFloat(), randomEndY.toFloat())
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(pressPath, 0, holdMs, true))
-            .addStroke(GestureDescription.StrokeDescription(dragPath, holdMs, pullMs, false))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, pullMs, false))
             .build()
         val deferred = CompletableDeferred<Boolean>()
         refreshHandler.post {
