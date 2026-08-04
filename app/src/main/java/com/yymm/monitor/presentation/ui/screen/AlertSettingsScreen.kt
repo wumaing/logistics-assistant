@@ -93,7 +93,40 @@ fun AlertSettingsScreen(
                 fontSize = 12.sp,
                 color = Color.Gray
             )
+            Spacer(Modifier.height(16.dp))
+
+            // 刷新滑动手势时长（用户自定，点击即保存）
+            Text("✋ 刷新手势时长（下拉滑动速度）", fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    300 to "0.3秒(快)",
+                    400 to "0.4秒(推荐)",
+                    600 to "0.6秒(慢)",
+                    800 to "0.8秒(更慢)",
+                    1000 to "1.0秒(最慢)"
+                ).forEach { (ms, label) ->
+                    IntervalOption(
+                        label = label,
+                        selected = settings.refreshDurationMs == ms,
+                        onClick = {
+                            viewModel.updateRefreshDuration(ms)
+                            viewModel.saveSettings() // 点击即生效
+                        }
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "时长太短可能触发不了运满满下拉刷新，太长则滑动笨重；推荐 0.4 秒",
+                fontSize = 12.sp,
+                color = Color.Gray
+            )
+            Spacer(Modifier.height(16.dp))
+
             // 校准刷新位置入口
             TextButton(
                 onClick = { navController.navigate("calibration") },

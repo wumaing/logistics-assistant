@@ -74,11 +74,17 @@ class AlertPopupActivity : ComponentActivity() {
             finish()
             return
         }
+        val missingFields = intent.getStringExtra("missing_fields")
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
 
         setContent {
             MaterialTheme {
                 AlertPopupContent(
                     order = order,
+                    missingFields = missingFields,
                     onIgnore = { onIgnore(order.id) },
                     onDismiss = { onDismiss(order.id) }
                 )
@@ -103,6 +109,7 @@ class AlertPopupActivity : ComponentActivity() {
     @Composable
     private fun AlertPopupContent(
         order: ParsedOrder,
+        missingFields: List<String>,
         onIgnore: () -> Unit,
         onDismiss: () -> Unit
     ) {
@@ -142,6 +149,25 @@ class AlertPopupActivity : ComponentActivity() {
                         )
                         Spacer(Modifier.height(16.dp))
 
+                        // 字段不全警告（P1）
+                        if (missingFields.isNotEmpty()) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3CD))
+                            ) {
+                                Text(
+                                    "⚠ 字段不全：${missingFields.joinToString("、")} 缺失，" +
+                                        "本单按宽松模式匹配，请先与货主确认",
+                                    modifier = Modifier.padding(12.dp),
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF856404),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(Modifier.height(12.dp))
+                        }
+
                         // 订单信息卡片
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -149,44 +175,77 @@ class AlertPopupActivity : ComponentActivity() {
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                // 出发地 → 目的地（大字）
-                                // OCR 来源订单优先展示原始文本（比解析的地名准确，真人可对照屏幕）
-                                val ocrRaw = order.rawTexts.firstOrNull()
-                                if (ocrRaw != null && (order.fromProvince.length <= 2 || order.toProvince.length <= 2)) {
-                                    Text(
-                                        ocrRaw,
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                } else {
-                                    Row(
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "${order.fromProvince} ${order.fromCity ?: ""}",
-                                            fontSize = 22.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text("↓", fontSize = 20.sp)
-                                        Text(
-                                            "${order.toProvince} ${order.toCity ?: ""}",
-                                            fontSize = 22.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
+                                // 出发地 → 目的地（加粗大字）
+                                // 用解析后的省市区展示（P0 已重建正确层级：山东/济宁/任城）
+                                Text(
+                                    "${order.fromProvince}${order.fromCity?.let { " $it" } ?: ""}${order.fromDistrict?.let { " $it" } ?: ""}",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF333333)
+                                )
+                                Text(
+                                    "↓",
+                                    fontSize = 20.sp,
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+                                Text(
+                                    "${order.toProvince}${order.toCity?.let { " $it" } ?: ""}${order.toDistrict?.let { " $it" } ?: ""}",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF333333)
+                                )
+                                Spacer(Modifier.height(16.dp))
+
+                                // 分隔线
+                                androidx.compose.foundation.layout.Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(1.dp)
+                                        .background(Color(0xFFEEEEEE))
+                                )
                                 Spacer(Modifier.height(12.dp))
 
-                                // 详细信息
-                                Text("货物：${order.cargoName ?: "未知"}")
-                                Text("重量：${formatWeight(order.weightMin, order.weightMax)}")
-                                Text("车型：${order.vehicleTypes.joinToString("/").ifEmpty { "不限" }}")
-                                Text("车长：${order.vehicleLengths.joinToString("/").ifEmpty { "不限" }}")
-                                Text("运费：${order.priceText}")
-                                Text("装货：${order.loadTimeText}")
-                                Text("距离：${order.distance ?: "未知"}")
-                                Text("标签：${order.tags.joinToString(" · ")}")
+                                // 匹配信息（小字）
+                                Text(
+                                    "货物：${order.cargoName ?: "未知"}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "重量：${formatWeight(order.weightMin, order.weightMax)}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "车型：${order.vehicleTypes.joinToString("/").ifEmpty { "不限" }}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "车长：${order.vehicleLengths.joinToString("/").ifEmpty { "不限" }}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "运费：${order.priceText.ifEmpty { "电议" }}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "装货：${extractLoadTime(order.loadTimeText)}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "距离：${order.distance ?: "未知"}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
+                                Text(
+                                    "标签：${order.tags.joinToString(" · ").ifEmpty { "无" }}",
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF666666)
+                                )
                             }
                         }
 
@@ -225,5 +284,25 @@ class AlertPopupActivity : ComponentActivity() {
         min != null -> "${min}吨"
         max != null -> "${max}吨"
         else -> "未知"
+    }
+
+    /**
+     * 从 loadTimeText（OCR 整卡原文）提取装货时间短语。
+     * 匹配"今天/明天/后天/昨天 + 装货"或"X点装货"等。
+     */
+    private fun extractLoadTime(text: String): String {
+        if (text.isBlank()) return "未知"
+        val keywords = listOf("今天", "明天", "后天", "昨天", "即时")
+        for (kw in keywords) {
+            if (text.contains(kw)) return "${kw}装货"
+        }
+        // "23-24点装货" / "5-8点装货"
+        val timePattern = Regex("""(\d{1,2})[-~](\d{1,2})点装货""")
+        val m = timePattern.find(text)
+        if (m != null) return "${m.groupValues[1]}-${m.groupValues[2]}点装货"
+        val timePattern2 = Regex("""(\d{1,2})点装货""")
+        val m2 = timePattern2.find(text)
+        if (m2 != null) return "${m2.groupValues[1]}点装货"
+        return "未知"
     }
 }

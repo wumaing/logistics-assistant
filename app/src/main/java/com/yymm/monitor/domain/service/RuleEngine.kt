@@ -7,6 +7,7 @@ import com.yymm.monitor.data.model.ParsedOrder
 import com.yymm.monitor.data.model.WeightRange
 import com.yymm.monitor.data.repository.RuleRepository
 import com.yymm.monitor.data.repository.SettingsRepository
+import com.yymm.monitor.domain.model.MatchResult
 import java.util.Calendar
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,20 +21,24 @@ import javax.inject.Singleton
 @Singleton
 class RuleEngine @Inject constructor(
     private val ruleRepository: RuleRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val regionMatcher: RegionMatcher
 ) {
 
-    suspend fun match(order: ParsedOrder): Boolean {
+    suspend fun match(order: ParsedOrder): MatchResult? {
         val activeRules = ruleRepository.getActiveRules()
-        if (activeRules.isEmpty()) return false
-        return activeRules.any { rule -> matchOrderWithRule(order, rule) }
+        if (activeRules.isEmpty()) return null
+        for (rule in activeRules) {
+            matchOrderWithRule(order, rule)?.let { return it }
+        }
+        return null
     }
 
     /** 获取全部激活规则（用于悬浮窗"当前匹配规则"汇总展示） */
     suspend fun activeRules(): List<MatchRuleEntity> = ruleRepository.getActiveRules()
 
-    fun matchOrderWithRule(order: ParsedOrder, rule: MatchRuleEntity): Boolean {
-        if (rule.ruleStatus != "ACTIVE") return false
+    suspend fun matchOrderWithRule(order: ParsedOrder, rule: MatchRuleEntity): MatchResult? {
+        if (rule.ruleStatus != "ACTIVE") return null
 
         // 匹配模式：INCLUDE_CHILDREN=包含下级（选省匹配省内所有市区），EXACT=同层精确
         val includeChildren = settingsRepository.getMatchMode() != "EXACT"
@@ -47,24 +52,34 @@ class RuleEngine @Inject constructor(
 
         // ========== 第一优先级：出发地与目的地 ==========
         // 1. 出发地匹配（OR）
-        // 规则地区匹配：正常按 LocationRule.matches；OCR 乱码（不在地区词典）时
+        // 规则地区匹配：正常按 LocationRule.matches；OCR 乱码（反查不到地区词典）时
         // 地名不可靠 → 宽松放行（由真人对照屏幕判断），避免误杀
         val fromMatch = fromLocations.isEmpty() ||
-            fromLocations.any { it.matches(order.fromProvince, order.fromCity, includeChildren = includeChildren) } ||
-            !isKnownRegion(order.fromProvince) || // OCR 乱码（不在词典）→ 放行
+            fromLocations.any {
+                it.matches(
+                    order.fromProvince, order.fromCity, order.fromDistrict,
+                    includeChildren = includeChildren
+                )
+            } ||
+            !regionMatcher.isKnownRegion(order.fromProvince) || // OCR 反查不到词典 → 乱码放行
             parseStringList(rule.fromCustomPointsJson).any { point ->
                 order.rawTexts.any { it.contains(point) }
             }
-        if (!fromMatch) return false
+        if (!fromMatch) return null
 
         // 2. 目的地匹配（OR）
         val toMatch = toLocations.isEmpty() ||
-            toLocations.any { it.matches(order.toProvince, order.toCity, includeChildren = includeChildren) } ||
-            !isKnownRegion(order.toProvince) ||
+            toLocations.any {
+                it.matches(
+                    order.toProvince, order.toCity, order.toDistrict,
+                    includeChildren = includeChildren
+                )
+            } ||
+            !regionMatcher.isKnownRegion(order.toProvince) ||
             parseStringList(rule.toCustomPointsJson).any { point ->
                 order.rawTexts.any { it.contains(point) }
             }
-        if (!toMatch) return false
+        if (!toMatch) return null
 
         // ========== 次要优先级：其他筛选条件 ==========
         // 3. 货源类型匹配（OR）
@@ -77,20 +92,20 @@ class RuleEngine @Inject constructor(
                 else -> false
             }
         }
-        if (!cargoMatch) return false
+        if (!cargoMatch) return null
 
         // 4. 车长匹配（OR）— 宽松模式：订单"不限车长"时自动通过
         // it.startsWith(len) 处理 "3.8" 匹配 "3.8米" 的情况
         val lengthMatch = lengths.isEmpty() ||
             order.vehicleLengths.isEmpty() ||
             lengths.any { len -> order.vehicleLengths.any { it == len || it.startsWith(len) } }
-        if (!lengthMatch) return false
+        if (!lengthMatch) return null
 
         // 5. 车型匹配（OR）— 宽松模式：订单"不限车型"时自动通过
         val typeMatch = types.isEmpty() ||
             order.vehicleTypes.isEmpty() ||
             types.any { type -> order.vehicleTypes.contains(type) }
-        if (!typeMatch) return false
+        if (!typeMatch) return null
 
         // 6. 装货时间匹配（兼容"昨天"）
         val timeMatch = when (rule.loadTimeOption) {
@@ -105,7 +120,7 @@ class RuleEngine @Inject constructor(
             }
             else -> true
         }
-        if (!timeMatch) return false
+        if (!timeMatch) return null
 
         // 7. 重量匹配（OR）— 宽松模式：字段缺失时自动通过
         val weightMatch = if (weightRanges.isEmpty() && rule.weightMin == null && rule.weightMax == null) {
@@ -123,20 +138,37 @@ class RuleEngine @Inject constructor(
                 (rule.weightMax == null || orderMax <= rule.weightMax)
             inPreset || inCustom
         }
-        if (!weightMatch) return false
+        if (!weightMatch) return null
 
         // 8. 价格匹配（宽松模式核心）
         val priceMatch = matchPrice(order, rule)
-        if (!priceMatch) return false
+        if (!priceMatch) return null
 
         // 9. 更多筛选（AND）
         val extraMatch = (!rule.requireHighCredit || order.tags.contains("高信用货主")) &&
             (!rule.requireManyunbao || order.tags.contains("满运宝")) &&
             (!rule.requireDepositRefundable || order.tags.contains("订金可退")) &&
             (!rule.requirePrivilege || order.tags.contains("送抢单特权"))
-        if (!extraMatch) return false
+        if (!extraMatch) return null
 
-        return true
+        // ========== 匹配成功：计算缺失字段（P1） ==========
+        // 宽松模式下字段缺失仍放行，但记录缺失项供提醒标注"字段不全"
+        val missingFields = mutableSetOf<String>()
+        // 车长：规则设了车长条件，但订单没车长
+        if (lengths.isNotEmpty() && order.vehicleLengths.isEmpty()) missingFields.add("车长")
+        // 车型：规则设了车型条件，但订单没车型
+        if (types.isNotEmpty() && order.vehicleTypes.isEmpty()) missingFields.add("车型")
+        // 重量：规则设了重量条件，但订单没重量
+        val weightRuleSet = weightRanges.isNotEmpty() || rule.weightMin != null || rule.weightMax != null
+        if (weightRuleSet && order.weightMin == null && order.weightMax == null) missingFields.add("重量")
+        // 价格：规则设了价格条件，但订单没价格且非电议
+        val priceRuleSet = rule.minPrice != null && rule.minPrice > 0 ||
+            rule.includeDianyiWithPrice || rule.includeDianyiWithoutPrice
+        if (priceRuleSet && order.priceAmount == null && !order.isDianyi) missingFields.add("价格")
+        // 装货时间：规则设了装货时间条件，但订单没装货时间
+        if (rule.loadTimeOption != "ANY" && order.loadTimeText.isBlank()) missingFields.add("装货时间")
+
+        return MatchResult(order, rule, missingFields)
     }
 
     /**
@@ -178,25 +210,6 @@ class RuleEngine @Inject constructor(
     private fun parseLocations(json: String): List<LocationRule> {
         return try { Gson().fromJson(json, Array<LocationRule>::class.java).toList() }
         catch (e: Exception) { emptyList() }
-    }
-
-    /** 省名是否在地区词典中（OCR 乱码不在词典 → 视为不可靠，宽松放行） */
-    private fun isKnownRegion(name: String): Boolean {
-        if (name.isBlank()) return false
-        val normalized = com.yymm.monitor.data.model.LocationRule.normalizeProvince(name)
-        return KNOW_PROVINCES.contains(normalized)
-    }
-
-    companion object {
-        /** 全国省级行政区（规范化后） */
-        private val KNOW_PROVINCES = setOf(
-            "北京", "天津", "上海", "重庆",
-            "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽",
-            "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南",
-            "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾",
-            "内蒙古", "广西", "西藏", "宁夏", "新疆",
-            "香港", "澳门"
-        )
     }
 
     private fun parseStringList(json: String): List<String> {

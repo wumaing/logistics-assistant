@@ -11,6 +11,11 @@ data class UserSettings(
     // 自动刷新起点坐标（用户校准；-1=使用默认屏高比例）
     val refreshStartX: Int = -1,
     val refreshStartY: Int = -1,
+    // 自动刷新终点坐标（用户校准；-1=使用默认屏高 65%）
+    val refreshEndX: Int = -1,
+    val refreshEndY: Int = -1,
+    // 刷新滑动手势时长（ms；0=默认，默认推荐 400ms）
+    val refreshDurationMs: Int = 400,
     val myVehicleLength: String? = null,
     val popupEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,

@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import com.yymm.monitor.data.local.entity.MatchRuleEntity
 import com.yymm.monitor.data.model.ParsedOrder
 import com.yymm.monitor.data.repository.SettingsRepository
@@ -52,6 +53,10 @@ class YymmMonitorService : AccessibilityService() {
         const val ACTION_START_MONITOR = "action_start_monitor"
         const val ACTION_PAUSE_MONITOR = "action_pause_monitor"
         const val ACTION_RESUME_MONITOR = "action_resume_monitor"
+        const val ACTION_SETTINGS_CHANGED = "action_settings_changed"
+        const val ACTION_TEST_REFRESH = "action_test_refresh"
+        /** 刷新事件广播 action（校准页监听，重播轨迹动画） */
+        const val ACTION_REFRESH_TICK = "com.yymm.monitor.REFRESH_TICK"
     }
 
     @Inject lateinit var orderParser: OrderParser
@@ -60,6 +65,11 @@ class YymmMonitorService : AccessibilityService() {
     @Inject lateinit var settingsRepo: SettingsRepository
     @Inject lateinit var ocrEngine: OcrEngine
     @Inject lateinit var ocrOrderParser: OcrOrderParser
+
+    /** 持久化监控运行状态（服务被杀后重连恢复 RUNNING） */
+    private val prefsMonitor by lazy {
+        getSharedPreferences("monitor_state", MODE_PRIVATE)
+    }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshHandler = Handler(Looper.getMainLooper())
@@ -109,6 +119,12 @@ class YymmMonitorService : AccessibilityService() {
     private fun diagLog(msg: String) {
         try {
             val f = java.io.File(filesDir, "monitor_log.txt")
+            // 自动清理：超过 300KB 只保留最近半段（防日志无限增长占满内存）
+            if (f.length() > 300 * 1024) {
+                val lines = f.readLines()
+                val keep = lines.takeLast((lines.size / 2).coerceAtLeast(1))
+                f.writeText(keep.joinToString("\n") + "\n")
+            }
             f.appendText("[${System.currentTimeMillis()}] $msg\n")
         } catch (_: Exception) {}
     }
@@ -143,9 +159,17 @@ class YymmMonitorService : AccessibilityService() {
             // 手势能力由 accessibility_service_config.xml 的 canPerformGestures="true" 声明
             // （系统绑定服务时解析 XML 授予 CAPABILITY_CAN_PERFORM_GESTURES）
         }
-        // 启动即就绪：无障碍服务连接后自动进入 READY（悬浮窗显示"开始监控"），
-        // 无需额外等待。用户点击"开始"即进入 RUNNING 开始轮询匹配。
-        if (_monitorState.value == MonitorState.IDLE) {
+        // 服务重连恢复：若上次是 RUNNING（服务被杀/系统回收后重连），
+        // 自动恢复 RUNNING 并重启轮询，避免"计数停了"（监控静默退出）。
+        // 持久化状态存于 SharedPreferences，服务进程被杀后重建也能读到。
+        val wasRunning = prefsMonitor.getBoolean("monitor_running", false)
+        if (_monitorState.value == MonitorState.IDLE && wasRunning) {
+            diagLog("onServiceConnected 检测到上次在监控中，自动恢复 RUNNING")
+            _monitorState.value = MonitorState.RUNNING
+            FloatingWindowManager.updateState(MonitorState.RUNNING)
+            startRefreshLoop()
+        } else if (_monitorState.value == MonitorState.IDLE) {
+            // 启动即就绪：无障碍服务连接后自动进入 READY（悬浮窗显示"开始监控"）
             _monitorState.value = MonitorState.READY
             FloatingWindowManager.updateState(MonitorState.READY)
         }
@@ -201,6 +225,41 @@ class YymmMonitorService : AccessibilityService() {
             ACTION_START_MONITOR -> startMonitoring()
             ACTION_PAUSE_MONITOR -> pauseMonitoring("用户暂停")
             ACTION_RESUME_MONITOR -> startMonitoring()
+            ACTION_SETTINGS_CHANGED -> {
+                // 设置已变更（校准页保存后通知）：立即重读一次设置，
+                // 确保刷新手势用最新坐标。日志确认重读值。
+                val s = settingsRepo.getSettings()
+                diagLog("设置已变更，重新读取: 起点(${s.refreshStartX},${s.refreshStartY}) 终点(${s.refreshEndX},${s.refreshEndY}) 时长=${s.refreshDurationMs}ms")
+                if (_monitorState.value == MonitorState.RUNNING) {
+                    // 运行中：无需重启轮询，下一轮 doRefreshCycle 会读新设置
+                }
+            }
+            ACTION_TEST_REFRESH -> {
+                // 校准页"试刷一次"：用传入坐标立刻执行一次真实下拉手势，肉眼验证刷新手势位置。
+                // 传入 0 表示"不覆盖"该字段，用已保存设置值；其余用试刷参数。
+                val x = intent.getIntExtra("start_x", -1)
+                val y = intent.getIntExtra("start_y", -1)
+                val ex = intent.getIntExtra("end_x", -1)
+                val ey = intent.getIntExtra("end_y", -1)
+                val dur = intent.getIntExtra("duration_ms", 0)
+                diagLog("收到试刷指令: 起点($x,$y) 终点($ex,$ey) 时长=${dur}ms")
+                // 延迟 3 秒：给用户时间切到运满满页面再执行手势
+                refreshHandler.postDelayed({
+                    // canPerformGestures 是 API 33+ 属性，用 capabilities 检查兼容所有版本
+                    val gestureCapable = (serviceInfo?.capabilities
+                        ?.and(AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES)) != 0
+                    if (!gestureCapable) {
+                        diagLog("试刷失败：当前无法执行手势（可能不在可交互窗口）")
+                        toastOnMain("试刷失败：无法执行手势，请确认无障碍已开启且当前在运满满页面")
+                        return@postDelayed
+                    }
+                    serviceScope.launch {
+                        val ok = performTestRefresh(x, y, ex, ey, dur)
+                        diagLog("试刷完成 结果=$ok")
+                        toastOnMain(if (ok) "✅ 试刷完成：已从当前起点下拉到终点" else "❌ 试刷被取消/失败")
+                    }
+                }, 3000L)
+            }
         }
         return START_STICKY
     }
@@ -209,6 +268,7 @@ class YymmMonitorService : AccessibilityService() {
         // 不 cancel serviceScope：无障碍服务被系统暂时 unbind（如切走/回收）后，
         // 会再次 onServiceConnected 重新绑定。scope 一旦取消，后续 launch 抛异常，
         // 监控链路无法恢复（用户反馈"退出软件后无障碍被关闭"即源于此）。
+        // monitor_running 持久化标志不清理：若用户在监控中，重连后自动恢复 RUNNING。
         stopRefreshLoop()
         alertManager.destroy()
         instance = null
@@ -247,6 +307,7 @@ class YymmMonitorService : AccessibilityService() {
         // 不校验当前页面：真人主动打开运满满司机页后点"开始监控"，
         // 助手直接进入 RUNNING 开始轮询刷新+解析+匹配，由真人判断页面是否正确。
         _monitorState.value = MonitorState.RUNNING
+        prefsMonitor.edit().putBoolean("monitor_running", true).apply()
         FloatingWindowManager.updateState(MonitorState.RUNNING)
         serviceScope.launch { syncActiveRulesToFloat() }
         startRefreshLoop()
@@ -256,6 +317,7 @@ class YymmMonitorService : AccessibilityService() {
     fun pauseMonitoring(reason: String = "用户手动暂停") {
         if (_monitorState.value == MonitorState.PAUSED) return
         _monitorState.value = MonitorState.PAUSED
+        prefsMonitor.edit().putBoolean("monitor_running", false).apply()
         stopRefreshLoop()
         FloatingWindowManager.updateState(MonitorState.PAUSED, reason)
     }
@@ -283,6 +345,16 @@ class YymmMonitorService : AccessibilityService() {
     private suspend fun syncActiveRulesToFloat() {
         val rules = ruleEngine.activeRules()
         FloatingWindowManager.updateActiveRules(rules.map { it.name.ifBlank { "未命名规则" } })
+    }
+
+    /**
+     * 发送刷新事件广播（校准页监听后重播轨迹动画，直观显示"正在这里刷新"）。
+     */
+    private fun sendRefreshTickBroadcast() {
+        try {
+            sendBroadcast(Intent(ACTION_REFRESH_TICK))
+        } catch (_: Exception) {
+        }
     }
 
     private fun startRefreshLoop() {
@@ -331,6 +403,8 @@ class YymmMonitorService : AccessibilityService() {
         // 刷新计数实时反馈到悬浮窗（用户能看到"刷新: N次"在增长）
         val s = _stats.value
         FloatingWindowManager.updateStats(s.refreshCount, s.matchCount, s.confirmCount)
+        // 广播刷新事件：校准页监听后重播轨迹动画，直观显示"正在这里刷新"
+        sendRefreshTickBroadcast()
         if (!refreshOk) return
         delay(1000)
 
@@ -339,10 +413,16 @@ class YymmMonitorService : AccessibilityService() {
     }
 
     /**
-     * 下拉刷新：用户校准的起点坐标（或默认屏高比例），阻塞等待手势结果。
+     * 下拉刷新：模拟真人下拉手势，触发运满满下拉刷新。
      *
-     * 借鉴开源 AutoAction：手势加随机扰动（坐标/时长），更接近真人下拉，
-     * 避免被司机端识别为自动化操作而拦截手势（"手势被取消"的深层原因之一）。
+     * 运满满 flutter 页面：快速滑动被当作滚动列表，慢速"按住→下拉→松手"才识别为下拉刷新。
+     * 真人下拉分三段：
+     *  1. 按住起点（短暂停留 120ms，进入下拉模式）
+     *  2. 缓慢下拉（800-1200ms，触发下拉刷新动画）
+     *  3. 松手（触发刷新）
+     *
+     * 借鉴开源 AutoAction：手势加随机扰动（坐标/时长），更接近真人，
+     * 避免被司机端识别为自动化操作而拦截手势。
      *
      * @return true=手势成功完成；false=被取消/失败/超时（跳过本轮解析）
      */
@@ -350,22 +430,81 @@ class YymmMonitorService : AccessibilityService() {
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
-        // 用户校准的起点坐标（优先）；未校准用默认屏高 20%→65%
+        // 用户校准的起点/终点坐标（优先）；未校准用默认 屏高25%→87%
         val settings = settingsRepo.getSettings()
         val startX = if (settings.refreshStartX in 0..screenWidth) settings.refreshStartX else screenWidth / 2
         val startY = if (settings.refreshStartY in 0..screenHeight) settings.refreshStartY
-        else (screenHeight * 0.20f).toInt().coerceAtLeast(0)
-        val endY = (screenHeight * 0.65f).toInt().coerceAtMost(screenHeight - 1)
-        // 随机扰动（±10px，±50ms）：接近真人，防检测
+        else (screenHeight * 0.33f).toInt().coerceAtLeast(0)
+        val endX = if (settings.refreshEndX in 0..screenWidth) settings.refreshEndX else startX
+        val endY = if (settings.refreshEndY in 0..screenHeight) settings.refreshEndY
+        else (screenHeight * 0.87f).toInt().coerceAtMost(screenHeight - 1)
+        val durationMs = settings.refreshDurationMs
+        // 诊断：打印实际刷新手势坐标，验证校准是否生效
+        diagLog("performRefresh 轨迹: 起点($startX,$startY) 终点($endX,$endY) 时长=$durationMs")
+        return dispatchPullGesture(startX, startY, endX, endY, durationMs)
+    }
+
+    /**
+     * 校准页"试刷一次"：用传入坐标执行真实下拉手势（传 -1/0 的字段回退到已保存设置）。
+     *
+     * 与 performRefresh 共用 [dispatchPullGesture]，保证试刷和真实监控刷新手感一致。
+     */
+    private suspend fun performTestRefresh(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Int): Boolean {
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+        val settings = settingsRepo.getSettings()
+        val sX = if (startX in 0..screenWidth) startX else settings.refreshStartX.takeIf { it in 0..screenWidth } ?: (screenWidth / 2)
+        val sY = if (startY in 0..screenHeight) startY else settings.refreshStartY.takeIf { it in 0..screenHeight } ?: (screenHeight * 0.33f).toInt().coerceAtLeast(0)
+        val eX = if (endX in 0..screenWidth) endX else settings.refreshEndX.takeIf { it in 0..screenWidth } ?: sX
+        val eY = if (endY in 0..screenHeight) endY else settings.refreshEndY.takeIf { it in 0..screenHeight } ?: (screenHeight * 0.87f).toInt().coerceAtMost(screenHeight - 1)
+        val dur = durationMs.coerceIn(200, 2000)
+        diagLog("performTestRefresh 轨迹: 起点($sX,$sY) 终点($eX,$eY) 时长=$dur")
+        return dispatchPullGesture(sX, sY, eX, eY, dur)
+    }
+
+    /**
+     * 派发"按住→下拉→松手"三段手势（监控刷新与校准页试刷共用）。
+     *
+     * 运满满 flutter 页面：快速滑动被当作滚动列表，慢速"按住→下拉→松手"才识别为下拉刷新。
+     * 真人下拉分三段：
+     *  1. 按住起点（短暂停留 150ms，进入下拉模式）
+     *  2. 缓慢下拉到终点（指定时长，触发下拉刷新动画）
+     *  3. 松手（触发刷新）
+     *
+     * 手势加随机扰动（±10px，±15ms），更接近真人，避免被司机端识别为自动化操作而拦截手势。
+     *
+     * @return true=手势成功完成；false=被取消/失败/超时（跳过本轮解析）
+     */
+    private suspend fun dispatchPullGesture(
+        startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Int
+    ): Boolean {
+        // 随机扰动（±10px，±15ms）：接近真人，防检测
         val randomX = startX + (kotlin.random.Random.nextInt(-10, 10))
         val randomStartY = startY + (kotlin.random.Random.nextInt(-10, 10))
-        val randomDuration = 350 + (kotlin.random.Random.nextInt(0, 150))
-        val path = Path().apply {
+        val randomEndX = endX + (kotlin.random.Random.nextInt(-10, 10))
+        val randomEndY = endY + (kotlin.random.Random.nextInt(-10, 10))
+
+        // 真人下拉：按压→缓慢下拉→松手
+        //  段1：按压（手指在起点停留 150ms，进入下拉模式）—— willContinue=true 保持按住
+        //  段2：缓慢下拉到终点（用户设定时长，默认 400ms）—— 触发刷新动画
+        val holdMs = 150L
+        val baseDuration = durationMs.coerceIn(200, 2000)
+        val pullMs: Long = baseDuration.toLong() + (kotlin.random.Random.nextInt(-20, 20))
+
+        // 按压段：路径几乎不动（起点微移 1px，保持手指按下）
+        val pressPath = Path().apply {
             moveTo(randomX.toFloat(), randomStartY.toFloat())
-            lineTo(randomX.toFloat(), endY.toFloat())
+            lineTo(randomX.toFloat(), randomStartY.toFloat() + 1f)
+        }
+        // 下拉段：从起点缓慢滑到终点
+        val dragPath = Path().apply {
+            moveTo(randomX.toFloat(), randomStartY.toFloat())
+            lineTo(randomEndX.toFloat(), randomEndY.toFloat())
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, randomDuration.toLong()))
+            .addStroke(GestureDescription.StrokeDescription(pressPath, 0, holdMs, true))
+            .addStroke(GestureDescription.StrokeDescription(dragPath, holdMs, pullMs, false))
             .build()
         val deferred = CompletableDeferred<Boolean>()
         refreshHandler.post {
@@ -375,12 +514,21 @@ class YymmMonitorService : AccessibilityService() {
                 }
 
                 override fun onCancelled(gestureDescription: GestureDescription?) {
-                    diagLog("performRefresh 手势被取消")
+                    diagLog("下拉手势被取消")
                     deferred.complete(false)
                 }
             }, refreshHandler)
         }
         return withTimeoutOrNull(5000) { deferred.await() } ?: false
+    }
+
+    /** 在主线程 Toast（后台线程调用安全） */
+    private fun toastOnMain(msg: String) {
+        refreshHandler.post {
+            try {
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {}
+        }
     }
 
     /**
@@ -464,18 +612,32 @@ class YymmMonitorService : AccessibilityService() {
             diagLog("parseFromScreenCapture OCR 无文本")
             return
         }
+        // 完整 OCR 文本落盘（诊断用，看识别质量）
+        try {
+            java.io.File(filesDir, "ocr_debug.txt").writeText(ocrText)
+        } catch (_: Exception) {}
         diagLog("parseFromScreenCapture OCR 文本(${ocrText.length}字符): ${ocrText.take(80)}")
         val orders = ocrOrderParser.parse(ocrText)
-        diagLog("parseFromScreenCapture 解析到 ${orders.size} 个订单")
+        diagLog("parseFromScreenCapture 解析到 ${orders.size} 个订单，各字段: " +
+            orders.take(3).joinToString(" || ") { o ->
+                "出发=${o.fromProvince}/${o.fromCity}/${o.fromDistrict} 目的=${o.toProvince}/${o.toCity}/${o.toDistrict} " +
+                "重=${o.weightMin}吨 车型=${o.vehicleTypes} 车长=${o.vehicleLengths} 价=${o.priceText}"
+            }
+        )
         matchAndAlert(orders)
     }
 
     /** 匹配 + 提醒（共享，suspend：内部调用 suspend 的 match/triggerAlert） */
     private suspend fun matchAndAlert(orders: List<ParsedOrder>) {
         orders.forEach { order ->
-            if (ruleEngine.match(order) && !alertManager.isAlertedToday(order.id)) {
-                diagLog("匹配成功并提醒: ${order.fromProvince}${order.fromCity} → ${order.toProvince}${order.toCity}")
-                alertManager.triggerAlert(order)
+            val matchResult = ruleEngine.match(order)
+            if (matchResult != null && !alertManager.isAlertedToday(order.id)) {
+                val missing = matchResult.missingFields
+                diagLog(
+                    "匹配成功并提醒: ${order.fromProvince}/${order.fromCity} → ${order.toProvince}/${order.toCity}" +
+                        if (missing.isNotEmpty()) " ⚠字段不全:${missing.joinToString(",")}" else ""
+                )
+                alertManager.triggerAlert(order, missing)
                 _stats.value = _stats.value.copy(
                     matchCount = _stats.value.matchCount + 1
                 )

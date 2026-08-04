@@ -68,7 +68,7 @@ class AlertManager @Inject constructor(
         return todayAlertedOrders.contains(orderId)
     }
 
-    suspend fun triggerAlert(order: ParsedOrder) {
+    suspend fun triggerAlert(order: ParsedOrder, missingFields: Set<String> = emptySet()) {
         todayAlertedOrders.add(order.id)
         historyRepository.recordAlert(order)
         val settings = settingsRepository.getSettings()
@@ -76,10 +76,10 @@ class AlertManager @Inject constructor(
         when (settings.multiOrderHandling) {
             "QUEUE" -> {
                 alertQueue.offer(order)
-                processQueue(settings)
+                processQueue(settings, missingFields)
             }
             "LATEST" -> {
-                showAlertPopup(order)
+                showAlertPopup(order, missingFields)
                 triggerEffects(order, settings)
             }
         }
@@ -91,13 +91,13 @@ class AlertManager @Inject constructor(
      * popupDurationSeconds > 0 时按设定时长展示；0 表示一直显示（依赖用户点击关闭，
      * 这里用一个较短 delay 防止连续弹窗过快）。
      */
-    private fun processQueue(settings: UserSettings) {
+    private fun processQueue(settings: UserSettings, missingFields: Set<String> = emptySet()) {
         if (isProcessingQueue) return
         isProcessingQueue = true
         CoroutineScope(Dispatchers.Main).launch {
             while (alertQueue.isNotEmpty()) {
                 val order = alertQueue.poll() ?: break
-                showAlertPopup(order)
+                showAlertPopup(order, missingFields)
                 triggerEffects(order, settings)
                 // 弹窗显示时长：settings.popupDurationSeconds 秒，0 表示一直显示
                 // 如果 >0 则 delay，否则不 delay（依赖用户点击关闭）
@@ -112,12 +112,13 @@ class AlertManager @Inject constructor(
         }
     }
 
-    private fun showAlertPopup(order: ParsedOrder) {
+    private fun showAlertPopup(order: ParsedOrder, missingFields: Set<String> = emptySet()) {
         val intent = Intent(context, AlertPopupActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                 Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
             putExtra("order_json", Gson().toJson(order))
+            putExtra("missing_fields", missingFields.joinToString(","))
         }
         context.startActivity(intent)
     }
