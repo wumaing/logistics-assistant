@@ -469,32 +469,59 @@ class YymmMonitorService : AccessibilityService() {
     /**
      * 派发下拉手势（监控刷新与校准页试刷共用）。
      *
-     * 用单 stroke 缓慢下拉（单一触摸点从起点滑到终点）：
-     * - 慢速（用户设定时长，默认 400ms）让运满满 flutter 识别为下拉刷新
-     * - 单一触摸点让校准页 Compose 的 detectDragGestures 能响应（多 stroke 会导致校准页无响应）
-     *
-     * 手势加随机扰动（±10px，±15ms），更接近真人，避免被司机端识别为自动化操作而拦截手势。
+     * 优先用系统级 `input swipe`（等同真人手指，运满满 flutter 能识别下拉刷新——
+     * 实测 dispatchGesture 无障碍注入的手势运满满不识别，input swipe 系统注入可以）。
+     * input swipe 失败时回退到 dispatchGesture。
      *
      * @return true=手势成功完成；false=被取消/失败/超时（跳过本轮解析）
      */
     private suspend fun dispatchPullGesture(
         startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Int
     ): Boolean {
-        // 随机扰动（±10px，±15ms）：接近真人，防检测
+        // 随机扰动（±10px）：接近真人，防检测
         val randomX = startX + (kotlin.random.Random.nextInt(-10, 10))
         val randomStartY = startY + (kotlin.random.Random.nextInt(-10, 10))
         val randomEndX = endX + (kotlin.random.Random.nextInt(-10, 10))
         val randomEndY = endY + (kotlin.random.Random.nextInt(-10, 10))
-        // 慢速下拉（用户设定时长，默认 400ms）
-        val pullMs: Long = durationMs.coerceIn(200, 2000).toLong() + (kotlin.random.Random.nextInt(-20, 20))
+        val pullMs: Int = durationMs.coerceIn(200, 2000)
 
-        // 单 stroke：从起点缓慢滑到终点（单一触摸点，校准页可响应拖动）
-        val path = Path().apply {
-            moveTo(randomX.toFloat(), randomStartY.toFloat())
-            lineTo(randomEndX.toFloat(), randomEndY.toFloat())
+        // 方案0：UiAutomation 注入真实触摸事件（不带无障碍标志，运满满无法区分真人手指）
+        // 运满满检测 dispatchGesture 的 FLAG_FROM_ACCESSIBILITY 标志拒绝刷新；
+        // UiAutomation.injectInputEvent 注入系统级 InputEvent（等同真人触摸）。
+        if (injectRealTouchSwipe(randomX, randomStartY, randomEndX, randomEndY, pullMs)) {
+            diagLog("UiAutomation 真实触摸注入成功: ($randomX,$randomStartY)->($randomEndX,$randomEndY)")
+            return true
+        }
+        diagLog("UiAutomation 注入失败，回退其他方案")
+
+        // 方案1：系统级 input swipe（等同真人手指，运满满能识别下拉刷新）
+        try {
+            val cmd = "input swipe $randomX $randomStartY $randomEndX $randomEndY $pullMs"
+            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+            val exitCode = process.waitFor()
+            if (exitCode == 0) {
+                diagLog("input swipe 成功: $cmd")
+                return true
+            }
+            diagLog("input swipe 失败 exit=$exitCode: $cmd")
+        } catch (_: Exception) {
+        }
+
+        // 方案2：回退到无障碍 dispatchGesture（双指下拉）
+        // 运满满屏蔽单指无障碍手势（FLAG_IS_ACCESSIBILITY_EVENT 检测）；
+        // 双指平行下拉（Auto.js 社区防检测技巧）可能绕过屏蔽，尝试之。
+        val gestureDuration = 1200L
+        val path1 = Path().apply {
+            moveTo((randomX - 60).toFloat(), randomStartY.toFloat())
+            lineTo((randomEndX - 60).toFloat(), randomEndY.toFloat())
+        }
+        val path2 = Path().apply {
+            moveTo((randomX + 60).toFloat(), randomStartY.toFloat())
+            lineTo((randomEndX + 60).toFloat(), randomEndY.toFloat())
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, pullMs, false))
+            .addStroke(GestureDescription.StrokeDescription(path1, 0, gestureDuration, false))
+            .addStroke(GestureDescription.StrokeDescription(path2, 0, gestureDuration, false))
             .build()
         val deferred = CompletableDeferred<Boolean>()
         refreshHandler.post {
@@ -510,6 +537,88 @@ class YymmMonitorService : AccessibilityService() {
             }, refreshHandler)
         }
         return withTimeoutOrNull(5000) { deferred.await() } ?: false
+    }
+
+    /**
+     * 用 UiAutomation 注入真实触摸事件（等效真人手指，不带无障碍标志）。
+     *
+     * 运满满检测 dispatchGesture 的 FLAG_FROM_ACCESSIBILITY 标志拒绝下拉刷新；
+     * UiAutomation.injectInputEvent 注入的 InputEvent 不带该标志，运满满无法区分真人。
+     *
+     * 通过反射获取 AccessibilityService 内部的 UiAutomation（API 24+ 稳定存在）。
+     * 构造 MotionEvent 序列：DOWN → 多段 MOVE（模拟滑动）→ UP，时间递增。
+     */
+    private fun injectRealTouchSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
+        return try {
+            // 反射获取 UiAutomation（不同系统版本字段名不同，尝试多个）
+            var automationField: java.lang.reflect.Field? = null
+            val fieldNames = listOf("mUiAutomation", "automation", "mAccessibilityServiceConnection")
+            for (name in fieldNames) {
+                try {
+                    val f = android.accessibilityservice.AccessibilityService::class.java.getDeclaredField(name)
+                    f.isAccessible = true
+                    automationField = f
+                    diagLog("找到字段: $name, 类型=${f.type.simpleName}")
+                    break
+                } catch (e: NoSuchFieldException) {
+                    diagLog("无字段: $name")
+                } catch (e: Exception) {
+                    diagLog("字段访问异常: $name → ${e.message}")
+                }
+            }
+            if (automationField == null) {
+                // 列出所有字段名帮助定位
+                val names = android.accessibilityservice.AccessibilityService::class.java
+                    .declaredFields.map { it.name }.joinToString(",")
+                diagLog("AccessibilityService 字段: $names")
+                return false
+            }
+            val automation = automationField?.get(this) as? android.app.UiAutomation
+            if (automation == null) {
+                diagLog("UiAutomation 反射获取为 null (字段=${automationField?.name})")
+                return false
+            }
+            val injectMethod = android.app.UiAutomation::class.java.getMethod(
+                "injectInputEvent", android.view.InputEvent::class.java, Boolean::class.javaPrimitiveType
+            )
+
+            val now = SystemClock.uptimeMillis()
+            val steps = 10
+            val stepTime = (durationMs / steps).coerceAtLeast(10)
+            // DOWN 事件
+            val down = android.view.MotionEvent.obtain(
+                now, now,
+                android.view.MotionEvent.ACTION_DOWN, x1.toFloat(), y1.toFloat(), 0
+            )
+            if (!(injectMethod.invoke(automation, down, false) as Boolean)) return false
+            down.recycle()
+
+            // 分段 MOVE（模拟缓慢滑动）
+            for (i in 1..steps) {
+                val t = now + i * stepTime
+                val cx = x1 + (x2 - x1) * i / steps
+                val cy = y1 + (y2 - y1) * i / steps
+                val move = android.view.MotionEvent.obtain(
+                    now, t,
+                    android.view.MotionEvent.ACTION_MOVE, cx.toFloat(), cy.toFloat(), 0
+                )
+                injectMethod.invoke(automation, move, false)
+                move.recycle()
+                Thread.sleep(stepTime.toLong())
+            }
+
+            // UP 事件
+            val up = android.view.MotionEvent.obtain(
+                now, now + (steps + 1) * stepTime,
+                android.view.MotionEvent.ACTION_UP, x2.toFloat(), y2.toFloat(), 0
+            )
+            val ok = injectMethod.invoke(automation, up, false) as Boolean
+            up.recycle()
+            ok
+        } catch (e: Exception) {
+            diagLog("UiAutomation 注入异常: ${e.message}")
+            false
+        }
     }
 
     /** 在主线程 Toast（后台线程调用安全） */
